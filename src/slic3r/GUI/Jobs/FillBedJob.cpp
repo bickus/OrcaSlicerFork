@@ -7,6 +7,7 @@
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/GUI_ObjectList.hpp"
 #include "slic3r/GUI/GUI_Utils.hpp"
+#include "slic3r/GUI/MainFrame.hpp"
 #include "slic3r/GUI/Widgets/Label.hpp"
 #include "libnest2d/common.hpp"
 
