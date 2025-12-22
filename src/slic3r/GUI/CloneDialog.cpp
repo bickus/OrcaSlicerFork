@@ -9,8 +9,6 @@
 #include <algorithm>
 #include <wx/valnum.h>
 
-#include <wx/spinctrl.h>
-
 namespace Slic3r { namespace GUI {
 
 namespace {
@@ -24,24 +22,39 @@ public:
     {
         min_distance_mm = std::max(0.1, std::min(10.0, min_distance_mm));
 
+        const bool dark = wxGetApp().dark_mode();
+        const auto bg = dark ? wxColour(43, 43, 43) : wxColour(247, 247, 247);
+        const auto text_color = dark ? wxColour(235, 235, 235) : wxColour(30, 30, 30);
+        SetBackgroundColour(bg);
+
         auto main_sizer = new wxBoxSizer(wxVERTICAL);
+
+        auto distance_label = new Label(this, _L("Minimal distance between objects (mm)"));
+        distance_label->SetForegroundColour(text_color);
+        main_sizer->Add(distance_label, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
 
         auto distance_input = new ::TextInput(this,
                                               wxString::Format("%.2f", min_distance_mm),
-                                              _L("Minimal distance between objects (mm)"),
+                                              wxEmptyString,
                                               "",
                                               wxDefaultPosition,
-                                              wxSize(FromDIP(220), -1),
+                                              wxSize(FromDIP(240), -1),
                                               wxTE_PROCESS_ENTER);
         distance_input->GetTextCtrl()->SetValidator(wxFloatingPointValidator<double>(2, nullptr, wxNUM_VAL_ZERO_AS_BLANK));
+        distance_input->GetTextCtrl()->SetForegroundColour(text_color);
+        distance_input->GetTextCtrl()->SetBackgroundColour(dark ? wxColour(30, 30, 30) : *wxWHITE);
         distance_input->GetTextCtrl()->SetFocus();
-        main_sizer->Add(distance_input, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(10));
+        main_sizer->Add(distance_input, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
         m_distance_input = distance_input;
 
         m_rotation_cb = new ::CheckBox(this);
-        m_rotation_cb->SetLabel(_L("Allow rotation of objects"));
         m_rotation_cb->SetValue(allow_rotation);
-        main_sizer->Add(m_rotation_cb, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(10));
+        auto rotation_row = new wxBoxSizer(wxHORIZONTAL);
+        rotation_row->Add(m_rotation_cb, 0, wxALIGN_CENTER_VERTICAL);
+        auto rotation_label = new Label(this, _L("Allow rotation of objects"));
+        rotation_label->SetForegroundColour(text_color);
+        rotation_row->Add(rotation_label, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(6));
+        main_sizer->Add(rotation_row, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(8));
 
         auto buttons_sizer = new wxBoxSizer(wxHORIZONTAL);
         buttons_sizer->AddStretchSpacer();
@@ -86,7 +99,9 @@ private:
 CloneDialog::CloneDialog(wxWindow *parent)
     : DPIDialog(parent ? parent : static_cast<wxWindow *>(wxGetApp().mainframe), wxID_ANY, _L("Clone"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX)
 {
-    SetBackgroundColour(*wxWHITE);
+    const bool dark = wxGetApp().dark_mode();
+    const auto text_color = dark ? wxColour(235, 235, 235) : wxColour(32, 32, 32);
+    SetBackgroundColour(dark ? wxColour(43, 43, 43) : *wxWHITE);
     SetFont(Label::Body_14);
 
     m_plater = wxGetApp().plater();
@@ -97,6 +112,7 @@ CloneDialog::CloneDialog(wxWindow *parent)
     auto f_sizer = new wxFlexGridSizer(2, 2, FromDIP(4) , FromDIP(20));
 
     auto count_label = new wxStaticText(this, wxID_ANY, _L("Number of copies:"), wxDefaultPosition, wxDefaultSize, 0);
+    count_label->SetForegroundColour(text_color);
     m_count_spin = new SpinInput(this, wxEmptyString, "", wxDefaultPosition, wxSize(FromDIP(120), -1), wxSP_ARROW_KEYS, 1, 1000, 1);
     m_count_spin->GetTextCtrl()->SetFocus();
     f_sizer->Add(count_label  , 0, wxEXPAND | wxALIGN_CENTER_VERTICAL);
@@ -104,6 +120,7 @@ CloneDialog::CloneDialog(wxWindow *parent)
 
     auto arrange_label = new wxStaticText(this, wxID_ANY, _L("Auto arrange plate after cloning") + ":", wxDefaultPosition, wxDefaultSize, 0);
     arrange_label->Wrap(FromDIP(300));
+    arrange_label->SetForegroundColour(text_color);
     m_arrange_cb = new ::CheckBox(this);
     m_arrange_cb->SetValue(m_config->get("auto_arrange") == "true");
     f_sizer->Add(arrange_label, 0, wxEXPAND | wxALIGN_CENTER_VERTICAL);
@@ -230,7 +247,7 @@ CloneDialog::CloneDialog(wxWindow *parent)
         EndModal(wxID_CANCEL);
     });
 
-    bottom_sizer->Add(button_row, 1, wxEXPAND);
+    bottom_sizer->Add(button_row, 1, wxEXPAND | wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(10));
 
     v_sizer->Add(bottom_sizer, 0, wxEXPAND);
 

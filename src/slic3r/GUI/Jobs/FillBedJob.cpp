@@ -17,6 +17,9 @@
 #include <random>
 #include <chrono>
 #include <boost/format.hpp>
+#include <queue>
+#include <set>
+#include <cmath>
 
 namespace Slic3r {
 namespace GUI {
@@ -30,14 +33,21 @@ public:
         : DPIDialog(parent, wxID_ANY, _L("Tight fill progress"), wxDefaultPosition, wxDefaultSize,
                     wxCAPTION | wxCLOSE_BOX | wxSTAY_ON_TOP)
     {
+        const bool dark = wxGetApp().dark_mode();
+        SetBackgroundColour(dark ? wxColour(43, 43, 43) : wxColour(250, 250, 250));
+
+        auto text_color = dark ? wxColour(235, 235, 235) : wxColour(33, 33, 33);
+        auto header_color = dark ? wxColour(255, 255, 255) : wxColour(16, 16, 16);
+
         auto main_sizer = new wxBoxSizer(wxVERTICAL);
-        auto grid = new wxFlexGridSizer(3, static_cast<int>(titles.size()) + 1, FromDIP(6), FromDIP(12));
+        auto grid = new wxFlexGridSizer(static_cast<int>(titles.size()) + 1, 3, FromDIP(6), FromDIP(16));
         grid->AddGrowableCol(2, 1);
 
         auto add_header = [&](const wxString &text) {
             auto lbl = new wxStaticText(this, wxID_ANY, text);
             lbl->SetFont(Label::Body_14);
-            grid->Add(lbl, 0, wxALIGN_LEFT | wxRIGHT, FromDIP(4));
+            lbl->SetForegroundColour(header_color);
+            grid->Add(lbl, 0, wxALIGN_LEFT | wxBOTTOM, FromDIP(4));
         };
 
         add_header(_L("Strategy"));
@@ -47,19 +57,22 @@ public:
         for (const auto &title : titles) {
             auto title_lbl = new wxStaticText(this, wxID_ANY, title);
             title_lbl->SetFont(Label::Body_14);
-            grid->Add(title_lbl, 0, wxALIGN_LEFT);
+            title_lbl->SetForegroundColour(text_color);
+            grid->Add(title_lbl, 0, wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL);
 
             auto status_lbl = new wxStaticText(this, wxID_ANY, _L("Queued"));
-            grid->Add(status_lbl, 0, wxALIGN_LEFT);
+            status_lbl->SetForegroundColour(text_color);
+            grid->Add(status_lbl, 0, wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL);
 
             auto result_lbl = new wxStaticText(this, wxID_ANY, wxEmptyString);
-            grid->Add(result_lbl, 0, wxALIGN_LEFT);
+            result_lbl->SetForegroundColour(text_color);
+            grid->Add(result_lbl, 0, wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL);
 
             m_status_labels.push_back(status_lbl);
             m_result_labels.push_back(result_lbl);
         }
 
-        main_sizer->Add(grid, 0, wxALL, FromDIP(12));
+        main_sizer->Add(grid, 0, wxALL | wxEXPAND, FromDIP(12));
         SetSizerAndFit(main_sizer);
         CentreOnParent();
         wxGetApp().UpdateDlgDarkUI(this);
@@ -73,6 +86,7 @@ public:
         if (!result.empty())
             m_result_labels[idx]->SetLabel(result);
         Layout();
+        Refresh();
     }
 
 private:
@@ -229,16 +243,46 @@ inline bool intersects_existing(const ExPolygon &candidate, const std::vector<Ex
     return false;
 }
 
-size_t bottom_left_fill(arrangement::ArrangePolygons &selected,
-                        const arrangement::ArrangePolygons &obstacles,
-                        const arrangement::ArrangeParams &params,
-                        const Points &bedpts,
-                        coord_t clearance,
-                        bool allow_rotation)
+struct CandidateCorner {
+    coord_t x;
+    coord_t y;
+};
+
+struct CandidateCompare {
+    bool operator()(const CandidateCorner &a, const CandidateCorner &b) const
+    {
+        if (a.y == b.y)
+            return a.x > b.x;
+        return a.y > b.y;
+    }
+};
+
+size_t skyline_fill(arrangement::ArrangePolygons &selected,
+                    const arrangement::ArrangePolygons &obstacles,
+                    const arrangement::ArrangeParams &params,
+                    const Points &bedpts,
+                    coord_t clearance,
+                    bool allow_rotation)
 {
+    (void)params;
+    std::vector<arrangement::ArrangePolygon *> floating;
+    floating.reserve(selected.size());
+    for (auto &ap : selected)
+        if (ap.priority == 0 && ap.bed_idx != 0)
+            floating.push_back(&ap);
+    if (floating.empty())
+        return 0;
+
+    std::sort(floating.begin(), floating.end(), [](auto *a, auto *b) {
+        return polygon_area_mm2(*a) > polygon_area_mm2(*b);
+    });
+
     Polygon bed_polygon = make_bed_polygon(bedpts);
     BoundingBox bed_bb = bed_polygon.bounding_box();
-    coord_t step = std::max<coord_t>(scaled<coord_t>(0.5), clearance > 0 ? clearance / 2 : scaled<coord_t>(0.25));
+
+    std::priority_queue<CandidateCorner, std::vector<CandidateCorner>, CandidateCompare> queue;
+    queue.push({ bed_bb.min.x(), bed_bb.min.y() });
+    std::set<std::pair<coord_t, coord_t>> visited;
 
     std::vector<ExPolygon> occupied;
     auto add_occupied = [&](const arrangement::ArrangePolygons &items) {
@@ -249,50 +293,75 @@ size_t bottom_left_fill(arrangement::ArrangePolygons &selected,
     add_occupied(selected);
     add_occupied(obstacles);
 
-    size_t rescued = 0;
-    std::vector<double> rotation_candidates = { 0.0 };
-    if (allow_rotation) {
-        rotation_candidates.push_back(PI / 2.0);
-        rotation_candidates.push_back(PI);
-        rotation_candidates.push_back(3.0 * PI / 2.0);
-    }
+    const std::array<double, 4> rotation_candidates = { 0.0, PI / 2.0, PI, 3.0 * PI / 2.0 };
+    const std::array<double, 1> single_rotation = { 0.0 };
 
-    for (auto &ap : selected) {
-        if (ap.priority != 0 || ap.bed_idx == 0)
+    auto try_place = [&](arrangement::ArrangePolygon &ap, const CandidateCorner &candidate, arrangement::ArrangePolygon &out_ap, ExPolygon &inflated_poly, coord_t &width, coord_t &height) -> bool {
+        const auto &rotations = allow_rotation ? rotation_candidates : single_rotation;
+        for (double rot : rotations) {
+            arrangement::ArrangePolygon candidate_ap = ap;
+            candidate_ap.rotation = rot;
+            candidate_ap.translation(X) = candidate.x;
+            candidate_ap.translation(Y) = candidate.y;
+
+            ExPolygon padded = transformed_polygon_with_clearance(candidate_ap, clearance);
+            if (!polygon_inside_bed(padded, bed_polygon))
+                continue;
+            if (intersects_existing(padded, occupied))
+                continue;
+
+            BoundingBox bb = padded.contour.bounding_box();
+            width = bb.size().x();
+            height = bb.size().y();
+            out_ap = std::move(candidate_ap);
+            inflated_poly = std::move(padded);
+            return true;
+        }
+        return false;
+    };
+
+    auto enqueue_corner = [&](coord_t x, coord_t y) {
+        if (x < bed_bb.min.x() || y < bed_bb.min.y())
+            return;
+        if (x > bed_bb.max.x() || y > bed_bb.max.y())
+            return;
+        queue.push({ x, y });
+    };
+
+    size_t rescued = 0;
+    size_t guard = 0;
+    const size_t max_iterations = 50000;
+    while (!floating.empty() && !queue.empty() && guard++ < max_iterations) {
+        CandidateCorner corner = queue.top();
+        queue.pop();
+        if (!visited.insert({corner.x, corner.y}).second)
             continue;
 
-        bool placed = false;
-        for (double rot : rotation_candidates) {
-            arrangement::ArrangePolygon candidate = ap;
-            candidate.rotation = rot;
-            ExPolygon rotated = candidate.poly;
-            rotated.rotate(rot);
-            BoundingBox bb = rotated.contour.bounding_box();
-            coord_t w = bb.size().x();
-            coord_t h = bb.size().y();
+        bool placed_here = false;
+        for (auto it = floating.begin(); it != floating.end(); ++it) {
+            arrangement::ArrangePolygon fitted;
+            ExPolygon inflated;
+            coord_t width = 0, height = 0;
+            if (!try_place(**it, corner, fitted, inflated, width, height))
+                continue;
 
-            for (coord_t y = bed_bb.min.y(); y <= bed_bb.max.y() - h && !placed; y += step) {
-                for (coord_t x = bed_bb.min.x(); x <= bed_bb.max.x() - w; x += step) {
-                    candidate.translation(X) = x;
-                    candidate.translation(Y) = y;
+            arrangement::ArrangePolygon &ap = **it;
+            ap = std::move(fitted);
+            ap.bed_idx = 0;
+            occupied.emplace_back(std::move(inflated));
+            floating.erase(it);
+            ++rescued;
+            placed_here = true;
 
-                    ExPolygon candidate_poly = rotated;
-                    candidate_poly.translate(x, y);
-                    if (!polygon_inside_bed(candidate_poly, bed_polygon))
-                        continue;
-                    if (intersects_existing(candidate_poly, occupied))
-                        continue;
+            coord_t spacing = clearance > 0 ? clearance : scale_(0.1);
+            enqueue_corner(ap.translation(X) + width + spacing, ap.translation(Y));
+            enqueue_corner(ap.translation(X), ap.translation(Y) + height + spacing);
+            break;
+        }
 
-                    ap.translation = candidate.translation;
-                    ap.rotation = candidate.rotation;
-                    ap.bed_idx = 0;
-                    occupied.emplace_back(candidate_poly);
-                    ++rescued;
-                    placed = true;
-                    break;
-                }
-            }
-            if (placed) break;
+        if (!placed_here && queue.empty() && !floating.empty()) {
+            // Push a fallback corner further along Y axis to keep searching.
+            enqueue_corner(bed_bb.min.x(), corner.y + scale_(5.0));
         }
     }
 
@@ -506,8 +575,12 @@ void FillBedJob::prepare()
     double fixed_area = unsel_area + m_selected.size() * poly_area;
     double bed_area   = Polygon{m_bedpts}.area() / sc;
 
-    // This is the maximum number of items, the real number will always be close but less.
-    int needed_items = (bed_area - fixed_area) / poly_area;
+    double available_area = std::max(0.0, bed_area - fixed_area);
+    double theoretical_items = available_area / poly_area;
+    int needed_items = static_cast<int>(theoretical_items);
+    if (is_tight_mode())
+        needed_items = static_cast<int>(std::ceil(theoretical_items * 1.35)) + 4;
+    needed_items = std::max(0, needed_items);
 
     //int sel_id = m_plater->get_selection().get_instance_idx();
     // if the selection is not a single instance, choose the first as template
@@ -720,7 +793,7 @@ void FillBedJob::process(Ctl &ctl)
                                 scaled<coord_t>(std::max(0.1, m_options.min_distance_mm));
             size_t rescued = 0;
             if (strategy.enable_bottom_left)
-                rescued = bottom_left_fill(selected, unselected, local_params, local_bedpts, clearance, local_params.allow_rotations);
+                rescued = skyline_fill(selected, unselected, local_params, local_bedpts, clearance, local_params.allow_rotations);
             if (strategy.enable_compaction)
                 compaction_pass(selected, local_params, local_bedpts, clearance);
 
