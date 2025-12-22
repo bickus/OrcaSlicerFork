@@ -36,18 +36,22 @@ RenamedProfilesDialog::RenamedProfilesDialog(wxWindow *parent, const std::vector
                                   wxID_ANY,
                                   _L("The following presets were renamed. Select which ones you would like to update in this project."));
     intro->SetFont(Label::Body_12);
-    intro->Wrap(FromDIP(420));
+    intro->Wrap(FromDIP(520));
     main_sizer->Add(intro, 0, wxEXPAND | wxALL, FromDIP(10));
 
+    m_list_panel = new wxPanel(this);
+    m_list_panel->SetBackgroundColour(wxColour(248, 248, 248));
     auto list_sizer = new wxBoxSizer(wxVERTICAL);
     for (const auto &option : m_options) {
         auto checkbox = new ::CheckBox(this);
         checkbox->SetLabel(describe_option(option));
         checkbox->SetValue(true);
-        list_sizer->Add(checkbox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
+        checkbox->SetLabelAlignment(wxALIGN_LEFT);
+        list_sizer->Add(checkbox, 0, wxEXPAND | wxALL, FromDIP(4));
         m_checkboxes.push_back(checkbox);
     }
-    main_sizer->Add(list_sizer, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(10));
+    m_list_panel->SetSizer(list_sizer);
+    main_sizer->Add(m_list_panel, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(10));
 
     m_buttons = new DialogButtons(this, {_L("OK"), _L("Cancel")});
     m_buttons->GetOK()->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_OK); });
@@ -55,6 +59,7 @@ RenamedProfilesDialog::RenamedProfilesDialog(wxWindow *parent, const std::vector
     main_sizer->Add(m_buttons, 0, wxEXPAND | wxALL, FromDIP(10));
 
     SetSizer(main_sizer);
+    SetMinSize(wxSize(FromDIP(560), FromDIP(240)));
     main_sizer->Fit(this);
     Centre(wxBOTH);
 
@@ -74,6 +79,8 @@ std::vector<RenameUpdateOption> RenamedProfilesDialog::selection() const
 
 void RenamedProfilesDialog::on_dpi_changed(const wxRect &suggested_rect)
 {
+    if (m_list_panel)
+        m_list_panel->Layout();
     Fit();
     if (suggested_rect.IsEmpty())
         CentreOnParent();
@@ -81,11 +88,9 @@ void RenamedProfilesDialog::on_dpi_changed(const wxRect &suggested_rect)
 
 wxString RenamedProfilesDialog::describe_option(const RenameUpdateOption &option) const
 {
-    wxString arrow = wxString::FromUTF8(" \u2192 "); // arrow symbol
-    return wxString::Format("%s: %s%s%s",
+    return wxString::Format("%s:\n   %s\n   \u2192 %s",
                             type_label(option.type),
                             from_u8(option.old_name),
-                            arrow,
                             from_u8(option.new_name));
 }
 

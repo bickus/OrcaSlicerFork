@@ -35,6 +35,7 @@ private:
 
     std::vector<RenameUpdateOption> m_options;
     std::vector<::CheckBox*>        m_checkboxes;
+    wxPanel *                       m_list_panel { nullptr };
     DialogButtons *                 m_buttons { nullptr };
 };
 
