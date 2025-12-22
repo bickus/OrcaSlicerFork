@@ -118,6 +118,11 @@ const wxString DEFAULT_PROJECT_NAME = "Untitled";
 class SidebarProps
 {
 public:
+    struct ReorderLabel {
+        size_t      instance_id{ 0 };
+        std::string text;
+    };
+
     static int TitlebarMargin(){ return 8 ;} // Use as side margins on titlebar. Has less margin on sides to create separation with its content
     static int ContentMargin() { return 12;} // Use as side margins contents of title
     static int ContentMarginV(){ return 9 ;} // Use as vertical margins contents of title
@@ -237,6 +242,10 @@ public:
     void                    update_ui_from_settings();
 	bool                    show_object_list(bool show) const;
     void                    finish_param_edit();
+    void                    toggle_reorder_mode();
+    void                    apply_reorder_changes();
+    void                    update_reorder_apply_state();
+    void                    force_end_reorder_mode();
 
     /**
      * @brief Automatically calculates flushing volumes
@@ -262,6 +271,8 @@ public:
 
 private:
     void  auto_calc_flushing_volumes_internal(const int filament_id, const int extruder_id);
+    void  enter_reorder_ui();
+    void  exit_reorder_ui();
 
 private:
     struct priv;
@@ -624,6 +635,14 @@ public:
     int get_publish_finished_event();
 
     void set_current_canvas_as_dirty();
+    bool start_reorder_mode();
+    bool cancel_reorder_mode();
+    bool apply_reorder_mode();
+    bool handle_reorder_pick(int object_idx);
+    bool is_reorder_mode_active() const;
+    size_t reorder_assignment_count() const;
+    int reorder_plate_index() const;
+    const std::vector<ReorderLabel>& reorder_overlay_labels() const;
     void unbind_canvas_event_handlers();
     void reset_canvas_volumes();
 

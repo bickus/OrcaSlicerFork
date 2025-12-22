@@ -5,6 +5,7 @@
 #include <wx/dataview.h>
 #include <vector>
 #include <map>
+#include <optional>
 
 #include "ExtraRenderers.hpp"
 
@@ -353,6 +354,7 @@ class ObjectDataViewModel :public wxDataViewModel
     std::vector<std::tuple<ObjectDataViewModelNode*, wxString, wxString>> assembly_name_list;
     std::vector<std::tuple<ObjectDataViewModelNode*, wxString, wxString>> search_found_list;
     std::map<int,std::map<int, int>>                                      m_ui_and_3d_volume_maps;
+    std::optional<int>                          m_plate_filter;
 
 public:
     ObjectDataViewModel();
@@ -515,6 +517,7 @@ public:
     void    SetAssociatedControl(wxDataViewCtrl* ctrl) { m_ctrl = ctrl; }
     // Rescale bitmaps for existing Items
     void    Rescale();
+    void    SetPlateFilter(std::optional<int> plate_idx);
 
     void        AddWarningIcon(const wxDataViewItem& item, const std::string& warning_name);
     void        DeleteWarningIcon(const wxDataViewItem& item, const bool unmark_object = false);
