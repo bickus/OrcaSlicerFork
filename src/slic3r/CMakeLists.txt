@@ -367,6 +367,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/ReleaseNote.hpp
     GUI/RemovableDriveManager.cpp
     GUI/RemovableDriveManager.hpp
+    GUI/RenamePresetDialog.cpp
+    GUI/RenamePresetDialog.hpp
     GUI/SavePresetDialog.cpp
     GUI/SavePresetDialog.hpp
     GUI/SceneRaycaster.cpp
