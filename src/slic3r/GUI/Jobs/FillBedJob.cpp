@@ -709,7 +709,7 @@ void FillBedJob::process(Ctl &ctl)
                 run_arrangement(selected, unselected, local_params, local_bedpts, label);
             } catch (const std::exception &ex) {
                 BOOST_LOG_TRIVIAL(warning) << "Tight fill strategy failed: " << ex.what();
-                update_strategy_ui(idx, _L("Failed"), from_utf8(ex.what()));
+                update_strategy_ui(idx, _L("Failed"), wxString::FromUTF8(ex.what()));
                 continue;
             }
 
