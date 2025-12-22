@@ -99,8 +99,6 @@ RenamePresetDialog::RenamePresetDialog(wxWindow *parent, PresetCollection *colle
 
 void RenamePresetDialog::on_dpi_changed(const wxRect &suggested_rect)
 {
-    if (m_buttons)
-        m_buttons->Rescale();
     Fit();
     if (suggested_rect.IsEmpty())
         CentreOnParent();

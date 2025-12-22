@@ -2453,9 +2453,9 @@ bool PresetCollection::rename_preset(const std::string &old_name, const std::str
     std::sort(m_presets.begin() + m_num_default_presets, m_presets.end());
     this->select_preset_by_name(new_name, true);
 
-    Preset *parent = this->get_selected_preset_parent();
+    const Preset *parent = this->get_selected_preset_parent();
     if (parent)
-        this->get_selected_preset().save(&(parent->config));
+        this->get_selected_preset().save(const_cast<DynamicPrintConfig*>(&parent->config));
     else
         this->get_selected_preset().save(nullptr);
 
