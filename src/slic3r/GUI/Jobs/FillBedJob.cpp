@@ -652,10 +652,10 @@ void FillBedJob::process(Ctl &ctl)
         for (const auto &s : strategies)
             strategy_titles.push_back(s.title);
 
-        std::shared_ptr<StrategyProgressDialog> progress_dialog;
+        StrategyProgressDialog *progress_dialog = nullptr;
         if (is_tight_mode() && strategies.size() > 1) {
             ctl.call_on_main_thread([&] {
-                progress_dialog = std::make_shared<StrategyProgressDialog>(wxGetApp().mainframe, strategy_titles);
+                progress_dialog = new StrategyProgressDialog(wxGetApp().mainframe, strategy_titles);
                 progress_dialog->Show();
             }).wait();
         }
@@ -663,9 +663,9 @@ void FillBedJob::process(Ctl &ctl)
         auto update_strategy_ui = [&](size_t idx, const wxString &status, const wxString &result = wxEmptyString) {
             if (!progress_dialog)
                 return;
-            ctl.call_on_main_thread([dialog = progress_dialog, idx, status, result] {
-                if (dialog)
-                    dialog->update(idx, status, result);
+            ctl.call_on_main_thread([progress_dialog, idx, status, result] {
+                if (progress_dialog)
+                    progress_dialog->update(idx, status, result);
             }).wait();
         };
 
@@ -753,10 +753,11 @@ void FillBedJob::process(Ctl &ctl)
         }
 
         if (progress_dialog) {
-            ctl.call_on_main_thread([dialog = progress_dialog] {
-                if (dialog)
-                    dialog->Destroy();
+            ctl.call_on_main_thread([progress_dialog] {
+                if (progress_dialog)
+                    progress_dialog->Destroy();
             }).wait();
+            progress_dialog = nullptr;
         }
     }
 
