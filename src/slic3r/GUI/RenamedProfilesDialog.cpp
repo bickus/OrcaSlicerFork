@@ -94,7 +94,7 @@ void RenamedProfilesDialog::on_dpi_changed(const wxRect &suggested_rect)
 
 wxString RenamedProfilesDialog::describe_option(const RenameUpdateOption &option) const
 {
-    return wxString::Format("%s:\n   %s\n   \u2192 %s",
+    return wxString::Format("%s:\n   %s\n   -> %s",
                             type_label(option.type),
                             from_u8(option.old_name),
                             from_u8(option.new_name));
