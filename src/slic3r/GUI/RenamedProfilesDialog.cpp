@@ -42,11 +42,18 @@ RenamedProfilesDialog::RenamedProfilesDialog(wxWindow *parent, const std::vector
     m_list_panel = new wxPanel(this);
     m_list_panel->SetBackgroundColour(wxColour(248, 248, 248));
     auto list_sizer = new wxBoxSizer(wxVERTICAL);
+    const int label_width = FromDIP(500);
     for (const auto &option : m_options) {
-        auto checkbox = new ::CheckBox(this);
-        checkbox->SetLabel(describe_option(option));
+        auto row = new wxBoxSizer(wxHORIZONTAL);
+        auto checkbox = new ::CheckBox(m_list_panel);
         checkbox->SetValue(true);
-        list_sizer->Add(checkbox, 0, wxEXPAND | wxALL, FromDIP(4));
+        row->Add(checkbox, 0, wxALIGN_TOP | wxRIGHT, FromDIP(6));
+
+        auto label = new wxStaticText(m_list_panel, wxID_ANY, describe_option(option), wxDefaultPosition, wxSize(label_width, -1));
+        label->Wrap(label_width);
+        row->Add(label, 1, wxALIGN_TOP | wxTOP | wxBOTTOM, FromDIP(2));
+
+        list_sizer->Add(row, 0, wxEXPAND | wxALL, FromDIP(6));
         m_checkboxes.push_back(checkbox);
     }
     m_list_panel->SetSizer(list_sizer);
