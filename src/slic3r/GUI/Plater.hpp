@@ -24,6 +24,7 @@
 #include "Jobs/SendJob.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/PrintBase.hpp"
+#include "ObjectReorderLabel.hpp"
 
 #include "libslic3r/calib.hpp"
 #include "libslic3r/CutUtils.hpp"
@@ -118,11 +119,6 @@ const wxString DEFAULT_PROJECT_NAME = "Untitled";
 class SidebarProps
 {
 public:
-    struct ReorderLabel {
-        size_t      instance_id{ 0 };
-        std::string text;
-    };
-
     static int TitlebarMargin(){ return 8 ;} // Use as side margins on titlebar. Has less margin on sides to create separation with its content
     static int ContentMargin() { return 12;} // Use as side margins contents of title
     static int ContentMarginV(){ return 9 ;} // Use as vertical margins contents of title
@@ -286,6 +282,7 @@ class Plater: public wxPanel
 {
 public:
     using fs_path = boost::filesystem::path;
+    using ReorderLabel = ObjectReorderLabel;
 
     Plater(wxWindow *parent, MainFrame *main_frame);
     Plater(Plater &&) = delete;
