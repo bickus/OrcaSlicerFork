@@ -71,10 +71,11 @@ RenamePresetDialog::RenamePresetDialog(wxWindow *parent, PresetCollection *colle
     m_message->SetForegroundColour(wxColour(255, 111, 0));
     main_sizer->Add(m_message, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(10));
 
-    m_buttons = new DialogButtons(this, {"Rename", "Cancel"});
-    m_buttons->GetOK()->SetLabel(_L("Rename"));
-    m_buttons->GetOK()->SetMinSize(wxSize(FromDIP(kButtonWidthDp), FromDIP(kButtonHeightDp)));
-    m_buttons->GetOK()->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+    m_buttons = new DialogButtons(this, {_L("OK"), _L("Cancel")});
+    auto ok_button = m_buttons->GetOK();
+    ok_button->SetLabel(_L("Rename"));
+    ok_button->SetMinSize(wxSize(FromDIP(kButtonWidthDp), FromDIP(kButtonHeightDp)));
+    ok_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
         if (m_buttons->GetOK()->IsEnabled())
             EndModal(wxID_OK);
     });

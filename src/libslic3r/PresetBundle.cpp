@@ -1,6 +1,7 @@
 #include <cassert>
 
 #include "PresetBundle.hpp"
+#include "PresetRenameHistory.hpp"
 #include "PrintConfig.hpp"
 #include "libslic3r.h"
 #include "Utils.hpp"
@@ -1610,6 +1611,7 @@ bool PresetBundle::rename_preset(Preset::Type type, const std::string &old_name,
         replace_in_option(project_config.option<ConfigOptionStrings>("default_filament_profile", false), old_name, new_name);
     }
 
+    PresetRenameHistory::instance().add_entry(type, old_name, new_name);
     update_compatible(PresetSelectCompatibleType::Never);
     return true;
 }
