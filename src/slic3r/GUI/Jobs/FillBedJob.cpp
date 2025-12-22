@@ -9,9 +9,65 @@
 #include "libnest2d/common.hpp"
 
 #include <numeric>
+#include <limits>
+#include <boost/format.hpp>
 
 namespace Slic3r {
 namespace GUI {
+
+namespace {
+
+struct StrategyMetrics {
+    size_t clones_on_bed      = 0;
+    size_t existing_off_bed   = 0;
+    size_t total_on_bed       = 0;
+    double footprint_area_mm2 = std::numeric_limits<double>::max();
+};
+
+inline StrategyMetrics collect_metrics(const arrangement::ArrangePolygons &items)
+{
+    StrategyMetrics metrics;
+    BoundingBox footprint;
+    bool has_footprint = false;
+    for (const auto &ap : items) {
+        if (ap.priority == 0 && ap.bed_idx == 0)
+            ++metrics.clones_on_bed;
+        if (ap.priority > 0 && ap.bed_idx != 0)
+            ++metrics.existing_off_bed;
+        if (ap.bed_idx == 0)
+            ++metrics.total_on_bed;
+
+        if (ap.bed_idx == 0) {
+            BoundingBox ap_bb = ap.transformed_poly().contour.bounding_box();
+            if (!has_footprint) {
+                footprint = ap_bb;
+                has_footprint = true;
+            } else {
+                footprint.merge(ap_bb);
+            }
+        }
+    }
+
+    if (has_footprint) {
+        metrics.footprint_area_mm2 = unscale<double>(footprint.size().x()) *
+                                     unscale<double>(footprint.size().y());
+    }
+
+    return metrics;
+}
+
+inline bool is_better(const StrategyMetrics &lhs, const StrategyMetrics &rhs)
+{
+    if (lhs.existing_off_bed != rhs.existing_off_bed)
+        return lhs.existing_off_bed < rhs.existing_off_bed;
+    if (lhs.clones_on_bed != rhs.clones_on_bed)
+        return lhs.clones_on_bed > rhs.clones_on_bed;
+    if (lhs.total_on_bed != rhs.total_on_bed)
+        return lhs.total_on_bed > rhs.total_on_bed;
+    return lhs.footprint_area_mm2 < rhs.footprint_area_mm2;
+}
+
+} // namespace
 
 //BBS: add partplate related logic
 void FillBedJob::prepare()
@@ -197,65 +253,173 @@ void FillBedJob::prepare()
 
 void FillBedJob::process(Ctl &ctl)
 {
-    auto statustxt = _u8L("Filling");
+    auto statustxt = is_tight_mode() ? _u8L("Filling tightly") : _u8L("Filling");
     ctl.call_on_main_thread([this] { prepare(); }).wait();
     ctl.update_status(0, statustxt);
 
     if (m_object_idx == -1 || m_selected.empty()) return;
 
-    update_arrange_params(params, m_plater->config(), m_selected);
-    m_bedpts = get_shrink_bedpts(m_plater->config(), params);
-
     auto &partplate_list               = m_plater->get_partplate_list();
-    auto &print                        = wxGetApp().plater()->get_partplate_list().get_current_fff_print();
     const Slic3r::DynamicPrintConfig& global_config = wxGetApp().preset_bundle->full_config();
-    PresetBundle* preset_bundle = wxGetApp().preset_bundle;
     const bool is_bbl = wxGetApp().preset_bundle->is_bbl_vendor();
-    if (is_bbl && params.avoid_extrusion_cali_region && global_config.opt_bool("scan_first_layer"))
-        partplate_list.preprocess_nonprefered_areas(m_unselected, MAX_NUM_PLATES);
-    
-    update_selected_items_inflation(m_selected, m_plater->config(), params);
-    update_unselected_items_inflation(m_unselected, m_plater->config(), params);
 
-    bool do_stop = false;
-    params.stopcondition = [&ctl, &do_stop]() {
-        return ctl.was_canceled() || do_stop;
-    };
+    auto run_arrangement = [&](ArrangePolygons &selected,
+                               ArrangePolygons &unselected,
+                               arrangement::ArrangeParams &local_params,
+                               Points &bedpts,
+                               const std::string &progress_label)
+    {
+        update_arrange_params(local_params, m_plater->config(), selected);
+        bedpts = get_shrink_bedpts(m_plater->config(), local_params);
 
-    params.progressind = [this, &ctl, &statustxt](unsigned st,std::string str="") {
-         if (st > 0)
-             ctl.update_status(st * 100 / status_range(), statustxt + " " + str);
-    };
+        if (is_bbl && local_params.avoid_extrusion_cali_region && global_config.opt_bool("scan_first_layer"))
+            partplate_list.preprocess_nonprefered_areas(unselected, MAX_NUM_PLATES);
 
-    params.on_packed = [&do_stop] (const ArrangePolygon &ap) {
-        do_stop = ap.bed_idx > 0 && ap.priority == 0;
-    };
-    // final align用的是凸包，在有fixed item的情况下可能找到的参考点位置是错的，这里就不做了。见STUDIO-3265
-    params.do_final_align = !is_bbl;
+        update_selected_items_inflation(selected, m_plater->config(), local_params);
+        update_unselected_items_inflation(unselected, m_plater->config(), local_params);
 
-    if (m_selected.size() > 100){
-        // too many items, just find grid empty cells to put them
-        Vec2f step = unscaled<float>(get_extents(m_selected.front().poly).size()) + Vec2f(m_selected.front().brim_width, m_selected.front().brim_width);
-        std::vector<Vec2f> empty_cells = Plater::get_empty_cells(step);
-        size_t n=std::min(m_selected.size(), empty_cells.size());
-        for (size_t i = 0; i < n; i++) {
-            m_selected[i].translation = scaled<coord_t>(empty_cells[i]);
-            m_selected[i].bed_idx= 0;
+        bool do_stop = false;
+        local_params.stopcondition = [&ctl, &do_stop]() {
+            return ctl.was_canceled() || do_stop;
+        };
+
+        local_params.progressind = [this, &ctl, &statustxt, progress_label](unsigned st, std::string str = std::string{})
+        {
+            if (st == 0)
+                return;
+            std::string message = statustxt;
+            if (!progress_label.empty())
+                message += " " + progress_label;
+            if (!str.empty())
+                message += " " + str;
+            ctl.update_status(st * 100 / status_range(), message);
+        };
+
+        local_params.on_packed = [&do_stop](const ArrangePolygon &ap) {
+            do_stop = ap.bed_idx > 0 && ap.priority == 0;
+        };
+
+        if (selected.size() > 100) {
+            Vec2f step = unscaled<float>(get_extents(selected.front().poly).size()) +
+                         Vec2f(selected.front().brim_width, selected.front().brim_width);
+            std::vector<Vec2f> empty_cells = Plater::get_empty_cells(step);
+            size_t n = std::min(selected.size(), empty_cells.size());
+            for (size_t i = 0; i < n; ++i) {
+                selected[i].translation = scaled<coord_t>(empty_cells[i]);
+                selected[i].bed_idx = 0;
+            }
+            for (size_t i = n; i < selected.size(); ++i)
+                selected[i].bed_idx = arrangement::UNARRANGED;
+        } else {
+            arrangement::arrange(selected, unselected, bedpts, local_params);
         }
-        for (size_t i = n; i < m_selected.size(); i++) {
-            m_selected[i].bed_idx = -1;
+    };
+
+    if (!is_tight_mode()) {
+        params.do_final_align = !is_bbl;
+        run_arrangement(m_selected, m_unselected, params, m_bedpts, {});
+    } else {
+        struct StrategyConfig {
+            std::string title;
+            double accuracy;
+            double distance_multiplier;
+            bool allow_rotations;
+            bool final_align;
+            bool align_to_y;
+        };
+
+        std::vector<StrategyConfig> strategies{
+            { _u8L("Baseline search"), 0.90, 1.0, false, true,  false },
+            { _u8L("Rotational permutations"), 1.0, 1.0, true,  false, false },
+            { _u8L("Edge-aligned sweep"), 0.95, 1.0, false, true,  true }
+        };
+
+        if (!m_options.enable_multi_strategy && !strategies.empty())
+            strategies.resize(1);
+
+        ArrangePolygons base_selected = m_selected;
+        ArrangePolygons base_unselected = m_unselected;
+        arrangement::ArrangeParams base_params = params;
+
+        struct StrategyResult {
+            arrangement::ArrangeParams params;
+            ArrangePolygons selected;
+            Points bedpts;
+            StrategyMetrics metrics;
+        };
+
+        StrategyResult best_result;
+        bool has_best = false;
+
+        for (size_t idx = 0; idx < strategies.size(); ++idx) {
+            if (ctl.was_canceled())
+                break;
+
+            const auto &strategy = strategies[idx];
+            auto selected = base_selected;
+            auto unselected = base_unselected;
+            auto local_params = base_params;
+            Points local_bedpts;
+
+            double min_mm = unscale<double>(local_params.min_obj_distance);
+            if (min_mm <= 0.0 && m_options.min_distance_mm > 0.0)
+                min_mm = m_options.min_distance_mm;
+            min_mm = std::max(min_mm, m_options.min_distance_mm);
+            min_mm *= strategy.distance_multiplier;
+            local_params.min_obj_distance = scaled(min_mm);
+
+            double shrink_mm = std::max<double>(local_params.bed_shrink_x, min_mm);
+            local_params.bed_shrink_x = shrink_mm;
+            local_params.bed_shrink_y = shrink_mm;
+
+            local_params.allow_rotations = strategy.allow_rotations && m_options.allow_rotation;
+            local_params.accuracy = strategy.accuracy;
+            local_params.align_to_y_axis = strategy.align_to_y;
+            local_params.do_final_align = strategy.final_align;
+
+            std::string label = (boost::format("[%1%/%2%] %3%")
+                                % (idx + 1)
+                                % strategies.size()
+                                % strategy.title).str();
+
+            try {
+                run_arrangement(selected, unselected, local_params, local_bedpts, label);
+            } catch (const std::exception &ex) {
+                BOOST_LOG_TRIVIAL(warning) << "Tight fill strategy failed: " << ex.what();
+                continue;
+            }
+
+            StrategyMetrics metrics = collect_metrics(selected);
+            if (!has_best || is_better(metrics, best_result.metrics)) {
+                has_best = true;
+                best_result.metrics = metrics;
+                best_result.params = local_params;
+                best_result.selected = std::move(selected);
+                best_result.bedpts = std::move(local_bedpts);
+            }
+        }
+
+        if (has_best) {
+            m_selected = std::move(best_result.selected);
+            params = best_result.params;
+            m_bedpts = std::move(best_result.bedpts);
+        } else {
+            params.do_final_align = !is_bbl;
+            run_arrangement(m_selected, m_unselected, params, m_bedpts, {});
         }
     }
-    else
-        arrangement::arrange(m_selected, m_unselected, m_bedpts, params);
 
-    // finalize just here.
-    ctl.update_status(100, ctl.was_canceled() ?
-                                       _u8L("Bed filling canceled.") :
-                                       _u8L("Bed filling done."));
+    const auto final_message = ctl.was_canceled()
+        ? (is_tight_mode() ? _u8L("Tight bed filling canceled.") : _u8L("Bed filling canceled."))
+        : (is_tight_mode() ? _u8L("Tight bed filling done.") : _u8L("Bed filling done."));
+
+    ctl.update_status(100, final_message);
 }
 
-FillBedJob::FillBedJob() : m_plater{wxGetApp().plater()} {}
+FillBedJob::FillBedJob(const FillBedOptions &options)
+    : m_plater{wxGetApp().plater()}
+    , m_options(options)
+{}
 
 void FillBedJob::finalize(bool canceled, std::exception_ptr &eptr)
 {

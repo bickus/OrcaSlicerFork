@@ -11804,7 +11804,18 @@ void Plater::fill_bed_with_instances()
     auto &w = get_ui_job_worker();
     if (w.is_idle()) {
         p->take_snapshot(_u8L("Arrange"));
-        replace_job(w, std::make_unique<FillBedJob>());
+        replace_job(w, std::make_unique<FillBedJob>(FillBedOptions{}));
+    }
+}
+
+void Plater::fill_bed_with_instances_tightly(const FillBedOptions &options)
+{
+    auto &w = get_ui_job_worker();
+    if (w.is_idle()) {
+        p->take_snapshot(_u8L("Arrange"));
+        FillBedOptions tight_options = options;
+        tight_options.mode = FillBedMode::Tight;
+        replace_job(w, std::make_unique<FillBedJob>(tight_options));
     }
 }
 
