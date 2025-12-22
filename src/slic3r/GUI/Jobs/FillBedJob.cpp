@@ -655,7 +655,8 @@ void FillBedJob::process(Ctl &ctl)
         StrategyProgressDialog *progress_dialog = nullptr;
         if (is_tight_mode() && strategies.size() > 1) {
             ctl.call_on_main_thread([&] {
-                progress_dialog = new StrategyProgressDialog(wxGetApp().mainframe, strategy_titles);
+                progress_dialog = new StrategyProgressDialog(
+                    static_cast<wxWindow *>(wxGetApp().mainframe), strategy_titles);
                 progress_dialog->Show();
             }).wait();
         }
