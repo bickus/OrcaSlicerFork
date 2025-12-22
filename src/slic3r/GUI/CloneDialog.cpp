@@ -53,6 +53,8 @@ public:
 private:
     wxSpinCtrlDouble *m_distance_spin { nullptr };
     ::CheckBox *m_rotation_cb { nullptr };
+
+    void on_dpi_changed(const wxRect &) override {}
 };
 
 } // namespace
