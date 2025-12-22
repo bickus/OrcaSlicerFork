@@ -6,16 +6,80 @@
 #include "slic3r/GUI/Plater.hpp"
 #include "slic3r/GUI/GLCanvas3D.hpp"
 #include "slic3r/GUI/GUI_ObjectList.hpp"
+#include "slic3r/GUI/GUI_Utils.hpp"
+#include "slic3r/GUI/Widgets/Label.hpp"
 #include "libnest2d/common.hpp"
 
 #include <numeric>
 #include <limits>
+#include <array>
+#include <random>
+#include <chrono>
 #include <boost/format.hpp>
 
 namespace Slic3r {
 namespace GUI {
 
 namespace {
+
+class StrategyProgressDialog : public DPIDialog
+{
+public:
+    StrategyProgressDialog(wxWindow *parent, const std::vector<wxString> &titles)
+        : DPIDialog(parent, wxID_ANY, _L("Tight fill progress"), wxDefaultPosition, wxDefaultSize,
+                    wxCAPTION | wxCLOSE_BOX | wxSTAY_ON_TOP)
+    {
+        auto main_sizer = new wxBoxSizer(wxVERTICAL);
+        auto grid = new wxFlexGridSizer(3, static_cast<int>(titles.size()) + 1, FromDIP(6), FromDIP(12));
+        grid->AddGrowableCol(2, 1);
+
+        auto add_header = [&](const wxString &text) {
+            auto lbl = new wxStaticText(this, wxID_ANY, text);
+            lbl->SetFont(Label::Body_14);
+            grid->Add(lbl, 0, wxALIGN_LEFT | wxRIGHT, FromDIP(4));
+        };
+
+        add_header(_L("Strategy"));
+        add_header(_L("Status"));
+        add_header(_L("Result"));
+
+        for (const auto &title : titles) {
+            auto title_lbl = new wxStaticText(this, wxID_ANY, title);
+            title_lbl->SetFont(Label::Body_14);
+            grid->Add(title_lbl, 0, wxALIGN_LEFT);
+
+            auto status_lbl = new wxStaticText(this, wxID_ANY, _L("Queued"));
+            grid->Add(status_lbl, 0, wxALIGN_LEFT);
+
+            auto result_lbl = new wxStaticText(this, wxID_ANY, wxEmptyString);
+            grid->Add(result_lbl, 0, wxALIGN_LEFT);
+
+            m_status_labels.push_back(status_lbl);
+            m_result_labels.push_back(result_lbl);
+        }
+
+        main_sizer->Add(grid, 0, wxALL, FromDIP(12));
+        SetSizerAndFit(main_sizer);
+        CentreOnParent();
+        wxGetApp().UpdateDlgDarkUI(this);
+    }
+
+    void update(size_t idx, const wxString &status, const wxString &result)
+    {
+        if (idx >= m_status_labels.size())
+            return;
+        m_status_labels[idx]->SetLabel(status);
+        if (!result.empty())
+            m_result_labels[idx]->SetLabel(result);
+        Layout();
+    }
+
+private:
+    std::vector<wxStaticText*> m_status_labels;
+    std::vector<wxStaticText*> m_result_labels;
+
+    void on_dpi_changed(const wxRect &) override {}
+};
 
 struct StrategyMetrics {
     size_t clones_on_bed      = 0;
@@ -65,6 +129,232 @@ inline bool is_better(const StrategyMetrics &lhs, const StrategyMetrics &rhs)
     if (lhs.total_on_bed != rhs.total_on_bed)
         return lhs.total_on_bed > rhs.total_on_bed;
     return lhs.footprint_area_mm2 < rhs.footprint_area_mm2;
+}
+
+enum class SeedMode {
+    None,
+    AreaDesc,
+    AreaAsc,
+    AspectRatio,
+    HeightDesc,
+    Randomized
+};
+
+inline double polygon_area_mm2(const arrangement::ArrangePolygon &ap)
+{
+    static const double scale2 = scaled<double>(1.) * scaled(1.);
+    return std::abs(ap.poly.area()) / scale2;
+}
+
+inline double polygon_aspect_ratio(const arrangement::ArrangePolygon &ap)
+{
+    BoundingBox bb = ap.poly.contour.bounding_box();
+    double w = std::max(unscale<double>(bb.size().x()), 0.001);
+    double h = std::max(unscale<double>(bb.size().y()), 0.001);
+    return std::max(w, h) / std::min(w, h);
+}
+
+inline void apply_seed_mode(arrangement::ArrangePolygons &items, SeedMode mode, std::mt19937 &rng)
+{
+    switch (mode) {
+    case SeedMode::AreaDesc:
+        std::stable_sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
+            return polygon_area_mm2(a) > polygon_area_mm2(b);
+        });
+        break;
+    case SeedMode::AreaAsc:
+        std::stable_sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
+            return polygon_area_mm2(a) < polygon_area_mm2(b);
+        });
+        break;
+    case SeedMode::AspectRatio:
+        std::stable_sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
+            return polygon_aspect_ratio(a) > polygon_aspect_ratio(b);
+        });
+        break;
+    case SeedMode::HeightDesc:
+        std::stable_sort(items.begin(), items.end(), [](const auto &a, const auto &b) {
+            return a.height > b.height;
+        });
+        break;
+    case SeedMode::Randomized:
+        std::shuffle(items.begin(), items.end(), rng);
+        break;
+    case SeedMode::None:
+    default:
+        break;
+    }
+}
+
+inline Polygon make_bed_polygon(const Points &bedpts)
+{
+    Polygon bed(bedpts);
+    return bed;
+}
+
+inline ExPolygon transformed_polygon_with_clearance(const arrangement::ArrangePolygon &ap, coord_t clearance)
+{
+    ExPolygon poly = ap.poly;
+    if (ap.rotation != 0.0)
+        poly.rotate(ap.rotation);
+    if (ap.translation.x() != 0 || ap.translation.y() != 0)
+        poly.translate(ap.translation.x(), ap.translation.y());
+    coord_t inflation = std::max(ap.inflation, clearance);
+    if (inflation > 0) {
+        auto polys = offset_ex(poly, inflation);
+        if (!polys.empty())
+            poly = polys.front();
+    }
+    return poly;
+}
+
+inline bool polygon_inside_bed(const ExPolygon &poly, const Polygon &bed_polygon)
+{
+    for (const auto &pt : poly.contour.points)
+        if (!bed_polygon.contains(pt))
+            return false;
+    for (const auto &hole : poly.holes)
+        for (const auto &pt : hole.points)
+            if (!bed_polygon.contains(pt))
+                return false;
+    return true;
+}
+
+inline bool intersects_existing(const ExPolygon &candidate, const std::vector<ExPolygon> &existing)
+{
+    for (const auto &other : existing)
+        if (!intersection(ExPolygons { candidate }, ExPolygons { other }).empty())
+            return true;
+    return false;
+}
+
+size_t bottom_left_fill(arrangement::ArrangePolygons &selected,
+                        const arrangement::ArrangePolygons &obstacles,
+                        const arrangement::ArrangeParams &params,
+                        const Points &bedpts,
+                        coord_t clearance,
+                        bool allow_rotation)
+{
+    Polygon bed_polygon = make_bed_polygon(bedpts);
+    BoundingBox bed_bb = bed_polygon.bounding_box();
+    coord_t step = std::max<coord_t>(scaled<coord_t>(0.5), clearance > 0 ? clearance / 2 : scaled<coord_t>(0.25));
+
+    std::vector<ExPolygon> occupied;
+    auto add_occupied = [&](const arrangement::ArrangePolygons &items) {
+        for (const auto &ap : items)
+            if (ap.bed_idx == 0)
+                occupied.emplace_back(transformed_polygon_with_clearance(ap, clearance));
+    };
+    add_occupied(selected);
+    add_occupied(obstacles);
+
+    size_t rescued = 0;
+    std::vector<double> rotation_candidates = { 0.0 };
+    if (allow_rotation) {
+        rotation_candidates.push_back(PI / 2.0);
+        rotation_candidates.push_back(PI);
+        rotation_candidates.push_back(3.0 * PI / 2.0);
+    }
+
+    for (auto &ap : selected) {
+        if (ap.priority != 0 || ap.bed_idx == 0)
+            continue;
+
+        bool placed = false;
+        for (double rot : rotation_candidates) {
+            arrangement::ArrangePolygon candidate = ap;
+            candidate.rotation = rot;
+            ExPolygon rotated = candidate.poly;
+            rotated.rotate(rot);
+            BoundingBox bb = rotated.contour.bounding_box();
+            coord_t w = bb.size().x();
+            coord_t h = bb.size().y();
+
+            for (coord_t y = bed_bb.min.y(); y <= bed_bb.max.y() - h && !placed; y += step) {
+                for (coord_t x = bed_bb.min.x(); x <= bed_bb.max.x() - w; x += step) {
+                    candidate.translation(X) = x;
+                    candidate.translation(Y) = y;
+
+                    ExPolygon candidate_poly = rotated;
+                    candidate_poly.translate(x, y);
+                    if (!polygon_inside_bed(candidate_poly, bed_polygon))
+                        continue;
+                    if (intersects_existing(candidate_poly, occupied))
+                        continue;
+
+                    ap.translation = candidate.translation;
+                    ap.rotation = candidate.rotation;
+                    ap.bed_idx = 0;
+                    occupied.emplace_back(candidate_poly);
+                    ++rescued;
+                    placed = true;
+                    break;
+                }
+            }
+            if (placed) break;
+        }
+    }
+
+    return rescued;
+}
+
+void compaction_pass(arrangement::ArrangePolygons &selected,
+                     const arrangement::ArrangeParams &params,
+                     const Points &bedpts,
+                     coord_t clearance)
+{
+    Polygon bed_polygon = make_bed_polygon(bedpts);
+    coord_t step = std::max<coord_t>(scaled<coord_t>(0.25), clearance > 0 ? clearance / 2 : scaled<coord_t>(0.1));
+    bool moved = true;
+    size_t guard = 0;
+
+    auto can_place = [&](const ArrangePolygon &candidate, size_t idx) {
+        ExPolygon candidate_poly = transformed_polygon_with_clearance(candidate, clearance);
+        if (!polygon_inside_bed(candidate_poly, bed_polygon))
+            return false;
+        for (size_t i = 0; i < selected.size(); ++i) {
+            if (i == idx || selected[i].bed_idx != 0)
+                continue;
+            ExPolygon other_poly = transformed_polygon_with_clearance(selected[i], clearance);
+            if (!intersection(ExPolygons { candidate_poly }, ExPolygons { other_poly }).empty())
+                return false;
+        }
+        return true;
+    };
+
+    while (moved && guard++ < 64) {
+        moved = false;
+        for (size_t idx = 0; idx < selected.size(); ++idx) {
+            auto &ap = selected[idx];
+            if (ap.priority != 0 || ap.bed_idx != 0)
+                continue;
+
+            constexpr std::array<std::pair<coord_t, coord_t>, 4> directions = {{
+                { -1, 0 }, { 0, -1 }, { -1, -1 }, { -1, 1 }
+            }};
+
+            for (auto [dx_unit, dy_unit] : directions) {
+                coord_t dx = dx_unit == 0 ? 0 : (dx_unit > 0 ? step : -step);
+                coord_t dy = dy_unit == 0 ? 0 : (dy_unit > 0 ? step : -step);
+                if (dx == 0 && dy == 0)
+                    continue;
+
+                ArrangePolygon candidate = ap;
+                bool local_move = false;
+                while (true) {
+                    candidate.translation(X) += dx;
+                    candidate.translation(Y) += dy;
+                    if (!can_place(candidate, idx))
+                        break;
+                    ap.translation = candidate.translation;
+                    local_move = true;
+                    moved = true;
+                }
+                if (local_move)
+                    break;
+            }
+        }
+    }
 }
 
 } // namespace
@@ -320,18 +610,23 @@ void FillBedJob::process(Ctl &ctl)
         run_arrangement(m_selected, m_unselected, params, m_bedpts, {});
     } else {
         struct StrategyConfig {
-            std::string title;
+            wxString title;
             double accuracy;
             double distance_multiplier;
             bool allow_rotations;
             bool final_align;
             bool align_to_y;
+            SeedMode seed_mode;
+            bool enable_bottom_left;
+            bool enable_compaction;
         };
 
         std::vector<StrategyConfig> strategies{
-            { _u8L("Baseline search"), 0.90, 1.0, false, true,  false },
-            { _u8L("Rotational permutations"), 1.0, 1.0, true,  false, false },
-            { _u8L("Edge-aligned sweep"), 0.95, 1.0, false, true,  true }
+            { _u8L("Baseline search"),          0.95, 1.0, false, true,  false, SeedMode::AreaDesc,   false, true  },
+            { _u8L("Rotational permutations"),  1.00, 1.0, true,  false, false, SeedMode::AspectRatio, false, true },
+            { _u8L("Edge-aligned sweep"),       0.95, 1.05, false, true,  true,  SeedMode::HeightDesc, false, true },
+            { _u8L("Bottom-left refinement"),   1.00, 1.0, false, true,  false, SeedMode::AreaAsc,    true,  true },
+            { _u8L("Stochastic anneal pass"),   1.00, 1.0, true,  false, false, SeedMode::Randomized, false, true }
         };
 
         if (!m_options.enable_multi_strategy && !strategies.empty())
@@ -346,20 +641,48 @@ void FillBedJob::process(Ctl &ctl)
             ArrangePolygons selected;
             Points bedpts;
             StrategyMetrics metrics;
+            size_t rescued = 0;
         };
 
         StrategyResult best_result;
         bool has_best = false;
+
+        std::vector<wxString> strategy_titles;
+        strategy_titles.reserve(strategies.size());
+        for (const auto &s : strategies)
+            strategy_titles.push_back(s.title);
+
+        std::shared_ptr<StrategyProgressDialog> progress_dialog;
+        if (is_tight_mode() && strategies.size() > 1) {
+            ctl.call_on_main_thread([&] {
+                progress_dialog = std::make_shared<StrategyProgressDialog>(wxGetApp().mainframe, strategy_titles);
+                progress_dialog->Show();
+            }).wait();
+        }
+
+        auto update_strategy_ui = [&](size_t idx, const wxString &status, const wxString &result = wxEmptyString) {
+            if (!progress_dialog)
+                return;
+            ctl.call_on_main_thread([dialog = progress_dialog, idx, status, result] {
+                if (dialog)
+                    dialog->update(idx, status, result);
+            }).wait();
+        };
+
+        std::mt19937 rng(static_cast<unsigned>(std::chrono::steady_clock::now().time_since_epoch().count()));
 
         for (size_t idx = 0; idx < strategies.size(); ++idx) {
             if (ctl.was_canceled())
                 break;
 
             const auto &strategy = strategies[idx];
+            update_strategy_ui(idx, _L("Running…"));
             auto selected = base_selected;
             auto unselected = base_unselected;
             auto local_params = base_params;
             Points local_bedpts;
+
+            apply_seed_mode(selected, strategy.seed_mode, rng);
 
             double min_mm = unscale<double>(local_params.min_obj_distance);
             if (min_mm <= 0.0 && m_options.min_distance_mm > 0.0)
@@ -386,8 +709,18 @@ void FillBedJob::process(Ctl &ctl)
                 run_arrangement(selected, unselected, local_params, local_bedpts, label);
             } catch (const std::exception &ex) {
                 BOOST_LOG_TRIVIAL(warning) << "Tight fill strategy failed: " << ex.what();
+                update_strategy_ui(idx, _L("Failed"), from_utf8(ex.what()));
                 continue;
             }
+
+            coord_t clearance = local_params.min_obj_distance > 0 ?
+                                local_params.min_obj_distance / 2 :
+                                scaled<coord_t>(std::max(0.1, m_options.min_distance_mm));
+            size_t rescued = 0;
+            if (strategy.enable_bottom_left)
+                rescued = bottom_left_fill(selected, unselected, local_params, local_bedpts, clearance, local_params.allow_rotations);
+            if (strategy.enable_compaction)
+                compaction_pass(selected, local_params, local_bedpts, clearance);
 
             StrategyMetrics metrics = collect_metrics(selected);
             if (!has_best || is_better(metrics, best_result.metrics)) {
@@ -396,7 +729,18 @@ void FillBedJob::process(Ctl &ctl)
                 best_result.params = local_params;
                 best_result.selected = std::move(selected);
                 best_result.bedpts = std::move(local_bedpts);
+                best_result.rescued = rescued;
             }
+
+            Polygon bed_poly(local_bedpts);
+            double bed_area = bed_poly.area() / (scaled<double>(1.) * scaled(1.));
+            double coverage = bed_area > 0 ? (metrics.footprint_area_mm2 / bed_area) * 100.0 : 0.0;
+            wxString result_text = wxString::Format(_L("%zu clones, %.1f%% coverage"), metrics.clones_on_bed, coverage);
+            if (rescued > 0)
+                result_text += wxString::Format(_L(", %zu rescued"), rescued);
+            if (strategy.enable_compaction)
+                result_text += _L(", compacted");
+            update_strategy_ui(idx, _L("Completed"), result_text);
         }
 
         if (has_best) {
@@ -406,6 +750,13 @@ void FillBedJob::process(Ctl &ctl)
         } else {
             params.do_final_align = !is_bbl;
             run_arrangement(m_selected, m_unselected, params, m_bedpts, {});
+        }
+
+        if (progress_dialog) {
+            ctl.call_on_main_thread([dialog = progress_dialog] {
+                if (dialog)
+                    dialog->Destroy();
+            }).wait();
         }
     }
 

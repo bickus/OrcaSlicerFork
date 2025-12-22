@@ -3,7 +3,11 @@
 #include "GUI_App.hpp"
 #include "MainFrame.hpp"
 
+#include "Widgets/TextInput.hpp"
+#include "Widgets/Label.hpp"
+
 #include <algorithm>
+#include <wx/valnum.h>
 
 #include <wx/spinctrl.h>
 
@@ -18,40 +22,60 @@ public:
         : DPIDialog(parent ? parent : static_cast<wxWindow *>(wxGetApp().mainframe), wxID_ANY,
                     _L("Fill tightly options"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX)
     {
-        SetBackgroundColour(*wxWHITE);
         min_distance_mm = std::max(0.1, std::min(10.0, min_distance_mm));
 
         auto main_sizer = new wxBoxSizer(wxVERTICAL);
 
-        auto distance_label = new wxStaticText(this, wxID_ANY, _L("Minimal distance between objects") + " (mm):");
-        main_sizer->Add(distance_label, 0, wxALL, FromDIP(10));
-
-        m_distance_spin = new wxSpinCtrlDouble(this, wxID_ANY, wxEmptyString, wxDefaultPosition,
-                                               wxSize(FromDIP(140), -1), wxSP_ARROW_KEYS, 0.1, 10.0,
-                                               min_distance_mm, 0.1);
-        m_distance_spin->SetDigits(1);
-        main_sizer->Add(m_distance_spin, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(10));
+        auto distance_input = new ::TextInput(this,
+                                              wxString::Format("%.2f", min_distance_mm),
+                                              _L("Minimal distance between objects (mm)"),
+                                              "",
+                                              wxDefaultPosition,
+                                              wxSize(FromDIP(220), -1),
+                                              wxTE_PROCESS_ENTER);
+        distance_input->GetTextCtrl()->SetValidator(wxFloatingPointValidator<double>(2, nullptr, wxNUM_VAL_ZERO_AS_BLANK));
+        distance_input->GetTextCtrl()->SetFocus();
+        main_sizer->Add(distance_input, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(10));
+        m_distance_input = distance_input;
 
         m_rotation_cb = new ::CheckBox(this);
         m_rotation_cb->SetLabel(_L("Allow rotation of objects"));
         m_rotation_cb->SetValue(allow_rotation);
         main_sizer->Add(m_rotation_cb, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(10));
 
-        auto buttons = new DialogButtons(this, {"OK", "Cancel"});
-        buttons->GetOK()->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_OK); });
-        buttons->GetCANCEL()->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_CANCEL); });
-        main_sizer->Add(buttons, 0, wxEXPAND | wxALL, FromDIP(10));
+        auto buttons_sizer = new wxBoxSizer(wxHORIZONTAL);
+        buttons_sizer->AddStretchSpacer();
+
+        auto ok_btn = new Button(this, _L("OK"));
+        ok_btn->SetStyle(ButtonStyle::Confirm, ButtonType::Choice);
+        ok_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_OK); });
+
+        auto cancel_btn = new Button(this, _L("Cancel"));
+        cancel_btn->SetStyle(ButtonStyle::Regular, ButtonType::Choice);
+        cancel_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_CANCEL); });
+
+        buttons_sizer->Add(ok_btn, 0, wxRIGHT, FromDIP(8));
+        buttons_sizer->Add(cancel_btn, 0);
+        main_sizer->Add(buttons_sizer, 0, wxEXPAND | wxALL, FromDIP(10));
 
         SetSizerAndFit(main_sizer);
         CentreOnParent();
         wxGetApp().UpdateDlgDarkUI(this);
     }
 
-    double min_distance_mm() const { return m_distance_spin->GetValue(); }
+    double min_distance_mm() const
+    {
+        double value = 0.1;
+        if (auto ctrl = m_distance_input ? m_distance_input->GetTextCtrl() : nullptr) {
+            ctrl->GetValue().ToDouble(&value);
+        }
+        return std::max(0.1, std::min(10.0, value));
+    }
+
     bool allow_rotation() const { return m_rotation_cb->GetValue(); }
 
 private:
-    wxSpinCtrlDouble *m_distance_spin { nullptr };
+    ::TextInput *m_distance_input { nullptr };
     ::CheckBox *m_rotation_cb { nullptr };
 
     void on_dpi_changed(const wxRect &) override {}
@@ -96,51 +120,69 @@ CloneDialog::CloneDialog(wxWindow *parent)
     m_progress->Hide();
     bottom_sizer->Add(m_progress, 2, wxEXPAND | wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(10));
 
-    // used next button to get automatic left alignment
-    // will add a left_align_first_n parameter to DialogButtons. current method not good
-    auto dlg_btns = new DialogButtons(this, {"Next", "Fill tightly", "OK", "Cancel"});
+    auto button_row = new wxBoxSizer(wxHORIZONTAL);
 
-    if (auto fill_tightly_btn = dlg_btns->GetButtonFromLabel(_L("Fill tightly"))) {
-        fill_tightly_btn->SetToolTip(_L("Open tight fill options"));
-        fill_tightly_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
-            double stored_distance = 1.0;
-            const wxString dist_str = wxString::FromUTF8(m_config->get("tight_fill_min_distance_mm"));
-            if (!dist_str.empty()) {
-                double parsed = wxAtof(dist_str);
-                if (parsed > 0.0)
-                    stored_distance = std::max(0.1, std::min(10.0, parsed));
-            }
+    auto fill_buttons = new wxBoxSizer(wxHORIZONTAL);
+    auto fill_btn = new Button(this, _L("Fill"));
+    fill_btn->SetStyle(ButtonStyle::Regular, ButtonType::Choice);
+    fill_btn->SetToolTip(_L("Fill bed with copies"));
 
-            const bool allow_rotation = m_config->get_bool("tight_fill_allow_rotation");
-            TightFillSettingsDialog dlg(this, stored_distance, allow_rotation);
-            if (dlg.ShowModal() == wxID_OK) {
-                const double distance = dlg.min_distance_mm();
-                const bool rotation = dlg.allow_rotation();
+    auto fill_tight_btn = new Button(this, _L("Fill tightly"));
+    fill_tight_btn->SetStyle(ButtonStyle::Regular, ButtonType::Choice);
+    fill_tight_btn->SetToolTip(_L("Open tight fill options"));
 
-                m_config->set("tight_fill_min_distance_mm",
-                              wxString::Format("%.2f", distance).ToStdString());
-                m_config->set_bool("tight_fill_allow_rotation", rotation);
+    fill_buttons->Add(fill_btn, 0, wxRIGHT, FromDIP(6));
+    fill_buttons->Add(fill_tight_btn, 0);
 
-                FillBedOptions options;
-                options.mode = FillBedMode::Tight;
-                options.min_distance_mm = distance;
-                options.allow_rotation = rotation;
-                options.enable_multi_strategy = true;
+    auto confirm_buttons = new wxBoxSizer(wxHORIZONTAL);
+    auto ok_btn = new Button(this, _L("OK"));
+    ok_btn->SetStyle(ButtonStyle::Confirm, ButtonType::Choice);
+    auto cancel_btn = new Button(this, _L("Cancel"));
+    cancel_btn->SetStyle(ButtonStyle::Regular, ButtonType::Choice);
 
-                m_plater->fill_bed_with_instances_tightly(options);
-                EndModal(wxID_OK);
-            }
-        });
-    }
+    confirm_buttons->Add(ok_btn, 0, wxRIGHT, FromDIP(6));
+    confirm_buttons->Add(cancel_btn, 0);
 
-    dlg_btns->GetNEXT()->SetLabel(_L("Fill"));
-    dlg_btns->GetNEXT()->SetToolTip(_L("Fill bed with copies"));
-    dlg_btns->GetNEXT()->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
+    button_row->Add(fill_buttons, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
+    button_row->AddStretchSpacer();
+    button_row->Add(confirm_buttons, 0, wxALIGN_CENTER_VERTICAL);
+
+    fill_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
         m_plater->fill_bed_with_instances();
         EndModal(wxID_OK);
     });
 
-    dlg_btns->GetOK()->Bind(wxEVT_BUTTON, [this, dlg_btns, v_sizer](wxCommandEvent &e) {
+    fill_tight_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+        double stored_distance = 1.0;
+        const wxString dist_str = wxString::FromUTF8(m_config->get("tight_fill_min_distance_mm"));
+        if (!dist_str.empty()) {
+            double parsed = wxAtof(dist_str);
+            if (parsed > 0.0)
+                stored_distance = std::max(0.1, std::min(10.0, parsed));
+        }
+
+        const bool allow_rotation = m_config->get_bool("tight_fill_allow_rotation");
+        TightFillSettingsDialog dlg(this, stored_distance, allow_rotation);
+        if (dlg.ShowModal() == wxID_OK) {
+            const double distance = dlg.min_distance_mm();
+            const bool rotation = dlg.allow_rotation();
+
+            m_config->set("tight_fill_min_distance_mm",
+                          wxString::Format("%.2f", distance).ToStdString());
+            m_config->set_bool("tight_fill_allow_rotation", rotation);
+
+            FillBedOptions options;
+            options.mode = FillBedMode::Tight;
+            options.min_distance_mm = distance;
+            options.allow_rotation = rotation;
+            options.enable_multi_strategy = true;
+
+            m_plater->fill_bed_with_instances_tightly(options);
+            EndModal(wxID_OK);
+        }
+    });
+
+    ok_btn->Bind(wxEVT_BUTTON, [this, fill_btn, fill_tight_btn, ok_btn, v_sizer](wxCommandEvent &) {
 
         m_count_spin->Disable(); // also ensures input box value applied with wxEVT_KILL_FOCUS
         m_arrange_cb->Disable();
@@ -149,8 +191,9 @@ CloneDialog::CloneDialog(wxWindow *parent)
 
         m_progress->Show();
 
-        dlg_btns->GetOK()->Hide();
-        dlg_btns->GetNEXT()->Hide();
+        ok_btn->Hide();
+        fill_btn->Hide();
+        fill_tight_btn->Hide();
 
         this->Layout();
         v_sizer->Fit(this);
@@ -180,14 +223,14 @@ CloneDialog::CloneDialog(wxWindow *parent)
         }
     });
 
-    dlg_btns->GetCANCEL()->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
+    cancel_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
         m_cancel_process = true;
         if(m_plater->IsFrozen())
             m_plater->Thaw();
         EndModal(wxID_CANCEL);
     });
 
-    bottom_sizer->Add(dlg_btns, 1, wxEXPAND);
+    bottom_sizer->Add(button_row, 1, wxEXPAND);
 
     v_sizer->Add(bottom_sizer, 0, wxEXPAND);
 

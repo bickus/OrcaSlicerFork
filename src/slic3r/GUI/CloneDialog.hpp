@@ -7,7 +7,6 @@
 
 #include "Widgets/Button.hpp"
 #include "Widgets/SpinInput.hpp"
-#include "Widgets/DialogButtons.hpp"
 #include "Widgets/CheckBox.hpp"
 #include "Widgets/ProgressBar.hpp"
 
