@@ -3813,7 +3813,7 @@ std::vector<RenameUpdateOption> collect_rename_update_options(const DynamicPrint
     std::vector<RenameUpdateOption> options;
     auto &history = PresetRenameHistory::instance();
 
-    if (auto printer = config.option<ConfigOptionString>("printer_settings_id", false)) {
+    if (const auto *printer = dynamic_cast<const ConfigOptionString*>(config.optptr("printer_settings_id"))) {
         const std::string &old_name = printer->value;
         if (!old_name.empty()) {
             if (auto resolved = history.resolve(Preset::TYPE_PRINTER, old_name); resolved && *resolved != old_name)
@@ -3821,7 +3821,7 @@ std::vector<RenameUpdateOption> collect_rename_update_options(const DynamicPrint
         }
     }
 
-    if (auto filaments = config.option<ConfigOptionStrings>("filament_settings_id", false)) {
+    if (const auto *filaments = dynamic_cast<const ConfigOptionStrings*>(config.optptr("filament_settings_id"))) {
         std::set<std::string> seen;
         for (const std::string &name : filaments->values) {
             if (name.empty() || !seen.insert(name).second)

@@ -44,7 +44,6 @@ RenamedProfilesDialog::RenamedProfilesDialog(wxWindow *parent, const std::vector
         auto checkbox = new ::CheckBox(this);
         checkbox->SetLabel(describe_option(option));
         checkbox->SetValue(true);
-        checkbox->Wrap(FromDIP(420));
         list_sizer->Add(checkbox, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
         m_checkboxes.push_back(checkbox);
     }
