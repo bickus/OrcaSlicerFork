@@ -491,6 +491,8 @@ void ObjectList::refresh_print_order_column()
 {
     if (m_objects_model == nullptr)
         return;
+    // Ensure the column visibility reflects current preset selection before refreshing data.
+    update_print_order_column_visibility();
     m_objects_model->UpdateColumValues(colPrintOrder);
     Refresh();
 }
