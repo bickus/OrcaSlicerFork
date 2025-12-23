@@ -7001,6 +7001,12 @@ void PrintConfigDef::handle_legacy(t_config_option_key &opt_key, std::string &va
 // Don't convert single options here, implement such conversion in PrintConfigDef::handle_legacy() instead.
 void PrintConfigDef::handle_legacy_composite(DynamicPrintConfig &config)
 {
+    if (!config.has("seam_to_overhang_distance")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("seam_to_overhang_distance");
+        if (default_opt != nullptr)
+            config.set_key_value("seam_to_overhang_distance", default_opt->clone());
+    }
+
     if (config.has("thumbnails")) {
         std::string extention;
         if (config.has("thumbnails_format")) {
