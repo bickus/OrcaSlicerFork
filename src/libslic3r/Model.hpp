@@ -19,6 +19,7 @@
 #include "TextConfiguration.hpp"
 #include "EmbossShape.hpp"
 #include "TriangleSelector.hpp"
+#include <cereal/cereal.hpp>
 
 //BBS: add bbs 3mf
 #include "Format/bbs_3mf.hpp"
@@ -711,6 +712,7 @@ private:
             Slic3r::save_object_mesh(*this);
         volume_ids.clear();
     }
+    CEREAL_SPLIT_MEMBER();
 
     // Called by Print::validate() from the UI thread.
     unsigned int update_instances_print_volume_state(const BuildVolume &build_volume);
@@ -1414,6 +1416,7 @@ private:
             print_order = 0;
         }
     }
+    CEREAL_SPLIT_MEMBER();
 };
 
 
