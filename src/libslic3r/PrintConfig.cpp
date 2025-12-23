@@ -1178,6 +1178,16 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(50, true));
 
+    def = this->add("seam_to_overhang_distance", coFloat);
+    def->label = L("Seam to overhang distance");
+    def->category = L("Quality");
+    def->tooltip = L("Keep seam start at least this distance away from the beginning of an overhang or bridge whenever possible. "
+                     "Set to 0 to disable this safeguard.");
+    def->sidetext = "mm";
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.0));
+
     def = this->add("enable_overhang_speed", coBool);
     def->label = L("Slow down for overhang");
     def->category = L("Speed");
