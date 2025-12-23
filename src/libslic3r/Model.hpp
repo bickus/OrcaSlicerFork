@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <functional>
 #include <optional>
+#include <type_traits>
 
 namespace cereal {
 	class BinaryInputArchive;

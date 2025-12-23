@@ -549,6 +549,7 @@ public:
     size_t reorder_assignment_count() const;
     int reorder_plate_index() const;
     const std::vector<ReorderLabel>& reorder_overlay_labels() const;
+    void ensure_custom_print_order_mode();
     void unbind_canvas_event_handlers();
     void reset_canvas_volumes();
 

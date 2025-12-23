@@ -2107,11 +2107,6 @@ void Sidebar::apply_reorder_changes()
     exit_reorder_ui();
     obj_list()->reload_all_plates();
     update_reorder_apply_state();
-    const auto *print_order_opt = wxGetApp().preset_bundle->prints.get_edited_preset().config.option<ConfigOptionEnum<PrintOrder>>("print_order");
-    const bool print_order_matches = print_order_opt && print_order_opt->value == PrintOrder::CustomOrdering;
-    if (!print_order_matches) {
-        Slic3r::GUI::show_info(this, _L("Set Intra-layer order to \"Custom ordering\" to use the assigned print order."));
-    }
 }
 
 void Sidebar::clear_reorder_numbers()
@@ -11588,6 +11583,19 @@ void Plater::update(bool conside_update_flag, bool force_background_processing_u
 
 void Plater::object_list_changed() { p->object_list_changed(); }
 
+void Plater::ensure_custom_print_order_mode()
+{
+    auto &print_preset = wxGetApp().preset_bundle->prints.get_edited_preset();
+    if (auto *opt = print_preset.config.option<ConfigOptionEnum<PrintOrder>>("print_order");
+        opt != nullptr && opt->value == PrintOrder::CustomOrdering)
+        return;
+
+    print_preset.config.set_key_value("print_order", new ConfigOptionEnum<PrintOrder>(PrintOrder::CustomOrdering));
+    print_preset.set_dirty();
+
+    if (auto *print_tab = wxGetApp().get_tab(Preset::TYPE_PRINT))
+        print_tab->update();
+}
 Worker &Plater::get_ui_job_worker() { return p->m_worker; }
 
 const Worker &Plater::get_ui_job_worker() const { return p->m_worker; }
@@ -15229,6 +15237,7 @@ bool Plater::priv::apply_reorder_mode()
         q->changed_objects(changed_indices);
     }
     q->object_list_changed();
+    q->ensure_custom_print_order_mode();
     if (sidebar && sidebar->obj_list())
         sidebar->obj_list()->refresh_print_order_column();
     if (reorder_state->forced_labels)
