@@ -1460,6 +1460,7 @@ bool ObjectDataViewModel::UpdateColumValues(unsigned col)
     switch (col)
     {
     case colPrint:
+    case colPrintOrder:
     case colName:
     case colEditing:
         return true;
@@ -1741,6 +1742,36 @@ wxString ObjectDataViewModel::GetColumnType(unsigned int col) const
     return wxT("string");
 }
 
+namespace {
+
+int get_node_print_order(ObjectDataViewModelNode* node)
+{
+    if (node == nullptr)
+        return 0;
+
+    if (node->m_type & itObject)
+        return (node->m_model_object != nullptr) ? node->m_model_object->print_order : 0;
+
+    if ((node->m_type & itInstance) == 0)
+        return 0;
+
+    ObjectDataViewModelNode* instance_root = node->m_parent;
+    if (instance_root == nullptr)
+        return 0;
+    ObjectDataViewModelNode* object_node = instance_root->GetParent();
+    if (object_node == nullptr || object_node->m_model_object == nullptr)
+        return 0;
+
+    ModelObject* obj = object_node->m_model_object;
+    const int idx = node->m_idx;
+    if (idx < 0 || size_t(idx) >= obj->instances.size())
+        return 0;
+    ModelInstance* inst = obj->instances[idx];
+    return inst != nullptr ? inst->print_order : 0;
+}
+
+} // namespace
+
 void ObjectDataViewModel::GetValue(wxVariant &variant, const wxDataViewItem &item, unsigned int col) const
 {
 	wxASSERT(item.IsOk());
@@ -1754,6 +1785,15 @@ void ObjectDataViewModel::GetValue(wxVariant &variant, const wxDataViewItem &ite
 	case colName:
         variant << DataViewBitmapText(node->m_name, node->m_bmp);
 		break;
+    case colPrintOrder:
+    {
+        const int order = get_node_print_order(node);
+        if (order > 0)
+            variant = wxString::Format("%d", order);
+        else
+            variant = wxString{};
+        break;
+    }
 	case colFilament:
 		variant << DataViewBitmapText(node->m_extruder, node->m_extruder_bmp);
 		break;

@@ -396,6 +396,7 @@ void ObjectList::create_objects_ctrl()
 
     m_columns_width.resize(colCount);
     m_columns_width[colName] = 22;
+    m_columns_width[colPrintOrder] = 4;
     m_columns_width[colPrint] = 3;
     m_columns_width[colFilament] = 5;
     m_columns_width[colSupportPaint] = 3;
@@ -416,6 +417,11 @@ void ObjectList::create_objects_ctrl()
         colName, m_columns_width[colName] * em, wxALIGN_LEFT, wxDATAVIEW_COL_RESIZABLE);
     //name_col->SetBitmap(create_scaled_bitmap("organize", nullptr, FromDIP(18)));
     AppendColumn(name_col);
+
+    auto* order_renderer = new wxDataViewTextRenderer("string", wxDATAVIEW_CELL_INERT, wxALIGN_CENTER);
+    wxDataViewColumn* order_col = new wxDataViewColumn(_L("Order"), order_renderer,
+        colPrintOrder, m_columns_width[colPrintOrder] * em, wxALIGN_CENTER, 0);
+    AppendColumn(order_col);
 
     // column PrintableProperty (Icon) of the view control:
     AppendBitmapColumn(" ", colPrint, wxOSX ? wxDATAVIEW_CELL_EDITABLE : wxDATAVIEW_CELL_INERT, m_columns_width[colPrint]*em,
@@ -459,6 +465,34 @@ void ObjectList::create_objects_ctrl()
         for (int cn = colName; cn < colCount; cn++)
             GetColumn(cn)->SetWidth(m_columns_width[cn] * em);
 #endif
+
+    update_print_order_column_visibility();
+}
+
+void ObjectList::update_print_order_column_visibility()
+{
+    if (GetColumnCount() <= colPrintOrder)
+        return;
+
+    bool show_column = false;
+    const auto* print_order_opt = wxGetApp().preset_bundle->prints.get_edited_preset().config.option<ConfigOptionEnum<PrintOrder>>("print_order");
+    if (print_order_opt != nullptr)
+        show_column = print_order_opt->value == PrintOrder::AsObjectList;
+
+    wxDataViewColumn* column = GetColumn(colPrintOrder);
+    if (column == nullptr)
+        return;
+
+    column->SetHidden(!show_column);
+    update_name_column_width();
+}
+
+void ObjectList::refresh_print_order_column()
+{
+    if (m_objects_model == nullptr)
+        return;
+    m_objects_model->UpdateColumValues(colPrintOrder);
+    Refresh();
 }
 
 void ObjectList::get_selected_item_indexes(int& obj_idx, int& vol_idx, const wxDataViewItem& input_item/* = wxDataViewItem(nullptr)*/)
@@ -1406,7 +1440,15 @@ void ObjectList::extruder_editing()
 
     wxPoint pos = this->get_mouse_position_in_control();
     wxSize size = wxSize(column_width, -1);
-    pos.x = GetColumn(colName)->GetWidth() + GetColumn(colPrint)->GetWidth() + 5;
+    auto visible_width = [this](int column_index) -> int {
+        if (column_index >= GetColumnCount())
+            return 0;
+        wxDataViewColumn* col = GetColumn(column_index);
+        if (col == nullptr || col->IsHidden())
+            return 0;
+        return col->GetWidth();
+    };
+    pos.x = GetColumn(colName)->GetWidth() + visible_width(colPrintOrder) + GetColumn(colPrint)->GetWidth() + 5;
     pos.y -= GetTextExtent("m").y;
 
     apply_extruder_selector(&m_extruder_editor, this, "1", pos, size);

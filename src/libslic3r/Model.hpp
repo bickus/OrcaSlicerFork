@@ -19,6 +19,7 @@
 #include "TextConfiguration.hpp"
 #include "EmbossShape.hpp"
 #include "TriangleSelector.hpp"
+#include <cereal/cereal.hpp>
 
 //BBS: add bbs 3mf
 #include "Format/bbs_3mf.hpp"
@@ -40,6 +41,7 @@
 namespace cereal {
 	class BinaryInputArchive;
 	class BinaryOutputArchive;
+    class Exception;
 	template <class T> void load_optional(BinaryInputArchive &ar, std::shared_ptr<const T> &ptr);
 	template <class T> void save_optional(BinaryOutputArchive &ar, const std::shared_ptr<const T> &ptr);
 	template <class T> void load_by_value(BinaryInputArchive &ar, T &obj);
@@ -373,6 +375,7 @@ public:
     LayerHeightProfile      layer_height_profile;
     // Whether or not this object is printable
     bool                    printable { true };
+    int                     print_order { 0 };
 
     // This vector holds position of selected support points for SLA. The data are
     // saved in mesh coordinates to allow using them for several instances.
@@ -679,8 +682,8 @@ private:
         Internal::StaticSerializationWrapper<ModelConfigObject const> config_wrapper(config);
         Internal::StaticSerializationWrapper<LayerHeightProfile const> layer_heigth_profile_wrapper(layer_height_profile);
         ar(name, module_name, input_file, instances, volumes, config_wrapper, layer_config_ranges, layer_heigth_profile_wrapper,
-            sla_support_points, sla_points_status, sla_drain_holes, printable, origin_translation, brim_points,
-            m_bounding_box_approx, m_bounding_box_approx_valid, 
+            sla_support_points, sla_points_status, sla_drain_holes, printable, print_order, origin_translation, brim_points);
+        ar(m_bounding_box_approx, m_bounding_box_approx_valid, 
             m_bounding_box_exact, m_bounding_box_exact_valid, m_min_max_z_valid,
             m_raw_bounding_box, m_raw_bounding_box_valid, m_raw_mesh_bounding_box, m_raw_mesh_bounding_box_valid,
             cut_connectors, cut_id);
@@ -692,7 +695,13 @@ private:
         // BBS: add backup, check modify
         SaveObjectGaurd gaurd(*this);
         ar(name, module_name, input_file, instances, volumes, config_wrapper, layer_config_ranges, layer_heigth_profile_wrapper,
-            sla_support_points, sla_points_status, sla_drain_holes, printable, origin_translation, brim_points,
+            sla_support_points, sla_points_status, sla_drain_holes, printable);
+        try {
+            ar(print_order);
+        } catch (const cereal::Exception&) {
+            print_order = 0;
+        }
+        ar(origin_translation, brim_points,
             m_bounding_box_approx, m_bounding_box_approx_valid, 
             m_bounding_box_exact, m_bounding_box_exact_valid, m_min_max_z_valid,
             m_raw_bounding_box, m_raw_bounding_box_valid, m_raw_mesh_bounding_box, m_raw_mesh_bounding_box_valid,
@@ -1248,6 +1257,7 @@ public:
     bool printable;
     bool use_loaded_id_for_label {false};
     int arrange_order = 0; // BBS
+    int print_order = 0;
     size_t loaded_id = 0; // BBS
 
     size_t get_labeled_id() const
@@ -1394,8 +1404,16 @@ private:
 	// Used for deserialization, therefore no IDs are allocated.
 	ModelInstance() : ObjectBase(-1), object(nullptr) { assert(this->id().invalid()); }
     // BBS. Add added members to archive.
-    template<class Archive> void serialize(Archive& ar) {
+    template<class Archive> void save(Archive& ar) const {
+        ar(m_transformation, print_volume_state, printable, m_assemble_transformation, m_offset_to_assembly, m_assemble_initialized, print_order);
+    }
+    template<class Archive> void load(Archive& ar) {
         ar(m_transformation, print_volume_state, printable, m_assemble_transformation, m_offset_to_assembly, m_assemble_initialized);
+        try {
+            ar(print_order);
+        } catch (const cereal::Exception&) {
+            print_order = 0;
+        }
     }
 };
 

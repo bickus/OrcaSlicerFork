@@ -2143,6 +2143,8 @@ void Sidebar::update_ui_from_settings()
 #if 0
     p->object_list->apply_volumes_order();
 #endif
+    if (p->m_object_list != nullptr)
+        p->m_object_list->update_print_order_column_visibility();
 }
 
 bool Sidebar::show_object_list(bool show) const
@@ -15093,8 +15095,24 @@ bool Plater::priv::apply_reorder_mode()
         desired_order.resize(candidates.size());
 
     int order_value = 1;
-    for (ModelInstance* inst : desired_order)
-        inst->arrange_order = order_value++;
+    for (ModelInstance* inst : desired_order) {
+        inst->arrange_order = order_value;
+        inst->print_order   = order_value;
+        ++order_value;
+    }
+
+    auto update_object_print_order = [](ModelObject* obj) {
+        if (obj == nullptr)
+            return;
+        int min_order = 0;
+        for (ModelInstance* instance : obj->instances) {
+            if (instance == nullptr || instance->print_order <= 0)
+                continue;
+            if (min_order == 0 || instance->print_order < min_order)
+                min_order = instance->print_order;
+        }
+        obj->print_order = min_order;
+    };
 
     std::unordered_map<ModelObject*, int> object_min_order;
     object_min_order.reserve(model.objects.size());
@@ -15105,6 +15123,7 @@ bool Plater::priv::apply_reorder_mode()
         auto it = object_min_order.find(candidate.object);
         if (it == object_min_order.end() || inst_order < it->second)
             object_min_order[candidate.object] = inst_order;
+        update_object_print_order(candidate.object);
     }
 
     std::vector<size_t> indices;
@@ -15177,6 +15196,8 @@ bool Plater::priv::apply_reorder_mode()
         q->changed_objects(changed_indices);
     }
     q->object_list_changed();
+    if (sidebar && sidebar->obj_list())
+        sidebar->obj_list()->refresh_print_order_column();
     if (reorder_state->forced_labels)
         q->show_view3D_labels(reorder_state->previous_labels_shown);
     reorder_state.reset();
