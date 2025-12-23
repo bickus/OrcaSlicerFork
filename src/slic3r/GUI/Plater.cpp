@@ -39,6 +39,7 @@
 #include <wx/busyinfo.h>
 #include <wx/event.h>
 #include <wx/wrapsizer.h>
+#include <wx/spinctrl.h>
 #ifdef _WIN32
 #include <wx/richtooltip.h>
 #include <wx/custombgwin.h>
@@ -11809,6 +11810,57 @@ void Plater::decrease_instances(size_t num)
     }
 }
 
+namespace {
+
+class NumberEntryDialog : public wxDialog
+{
+public:
+    NumberEntryDialog(wxWindow* parent,
+                      const wxString& message,
+                      const wxString& prompt,
+                      const wxString& title,
+                      long value,
+                      long min,
+                      long max)
+        : wxDialog(parent, wxID_ANY, title, wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+    {
+        const int padding = wxGetApp().em_unit() / 2;
+        wxBoxSizer* top_sizer = new wxBoxSizer(wxVERTICAL);
+
+        if (!message.empty()) {
+            auto* message_label = new wxStaticText(this, wxID_ANY, message);
+            top_sizer->Add(message_label, 0, wxEXPAND | wxALL, padding);
+        }
+
+        auto* prompt_label = new wxStaticText(this, wxID_ANY, prompt);
+        top_sizer->Add(prompt_label, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, padding);
+
+        m_spinner = new wxSpinCtrl(this, wxID_ANY);
+        const long clamped_value = std::clamp(value, min, max);
+        m_spinner->SetRange(static_cast<int>(min), static_cast<int>(max));
+        m_spinner->SetValue(static_cast<int>(clamped_value));
+        top_sizer->Add(m_spinner, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, padding);
+
+        top_sizer->AddSpacer(padding);
+        if (auto* buttons = CreateSeparatedButtonSizer(wxOK | wxCANCEL))
+            top_sizer->Add(buttons, 0, wxEXPAND | wxALL, padding);
+
+        SetSizerAndFit(top_sizer);
+        CentreOnParent();
+
+        wxGetApp().UpdateDlgDarkUI(this);
+        m_spinner->SetFocus();
+        m_spinner->SelectAll();
+    }
+
+    long GetValue() const { return static_cast<long>(m_spinner->GetValue()); }
+
+private:
+    wxSpinCtrl* m_spinner { nullptr };
+};
+
+} // namespace
+
 static long GetNumberFromUser(  const wxString& msg,
                                 const wxString& prompt,
                                 const wxString& title,
@@ -11817,16 +11869,8 @@ static long GetNumberFromUser(  const wxString& msg,
                                 long max,
                                 wxWindow* parent)
 {
-#ifdef _WIN32
-    wxNumberEntryDialog dialog(parent, msg, prompt, title, value, min, max, wxDefaultPosition);
-    wxGetApp().UpdateDlgDarkUI(&dialog);
-    if (dialog.ShowModal() == wxID_OK)
-        return dialog.GetValue();
-
-    return -1;
-#else
-    return wxGetNumberFromUser(msg, prompt, title, value, min, max, parent);
-#endif
+    NumberEntryDialog dialog(parent, msg, prompt, title, value, min, max);
+    return dialog.ShowModal() == wxID_OK ? dialog.GetValue() : -1;
 }
 
 void Plater::set_number_of_copies(/*size_t num*/)
@@ -15060,6 +15104,20 @@ bool Plater::priv::start_reorder_mode()
 
     if (state->ordered_candidates.empty())
         return false;
+
+    std::vector<ModelInstance*> preassigned;
+    preassigned.reserve(state->ordered_candidates.size());
+    for (const auto& candidate : state->ordered_candidates) {
+        if (candidate.instance != nullptr && candidate.instance->print_order > 0)
+            preassigned.push_back(candidate.instance);
+    }
+    std::sort(preassigned.begin(), preassigned.end(), [](const ModelInstance* lhs, const ModelInstance* rhs) {
+        if (lhs->print_order != rhs->print_order)
+            return lhs->print_order < rhs->print_order;
+        return lhs < rhs;
+    });
+    preassigned.erase(std::unique(preassigned.begin(), preassigned.end()), preassigned.end());
+    state->sequence = preassigned;
 
     state->previous_labels_shown = q->are_view3D_labels_shown();
     state->forced_labels         = !state->previous_labels_shown;
