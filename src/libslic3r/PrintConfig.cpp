@@ -1124,6 +1124,16 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
+    def = this->add("seam_to_overhang_distance", coFloat);
+    def->label = L("Seam to overhang distance");
+    def->category = L("Quality");
+    def->tooltip = L("Keep seam start at least this distance away from the beginning of an overhang or bridge whenever possible. "
+                     "Set to 0 to disable this safeguard.");
+    def->sidetext = "mm";
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.0));
+
     def = this->add("overhang_reverse", coBool);
     def->label = L("Reverse on even");
     def->full_label = L("Overhang reversal");
@@ -4438,16 +4448,6 @@ void PrintConfigDef::init_fff_params()
     def->min = 0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(10,true));
-
-    def = this->add("seam_to_overhang_distance", coFloat);
-    def->label = L("Seam to overhang distance");
-    def->category = L("Quality");
-    def->tooltip = L("Keep seam start at least this distance away from the beginning of an overhang or bridge whenever possible. "
-                     "Set to 0 to disable this safeguard.");
-    def->sidetext = "mm";
-    def->min = 0;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(0.0));
 
     def = this->add("seam_slope_type", coEnum);
     def->label = L("Scarf joint seam (beta)");
