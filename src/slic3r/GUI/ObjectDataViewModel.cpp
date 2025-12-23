@@ -1749,13 +1749,16 @@ int get_node_print_order(ObjectDataViewModelNode* node)
     if (node == nullptr)
         return 0;
 
-    if (node->m_type & itObject)
-        return (node->m_model_object != nullptr) ? node->m_model_object->print_order : 0;
+    const ItemType node_type = node->GetType();
+    if (node_type & itObject) {
+        ModelObject* model_object = node->m_model_object;
+        return (model_object != nullptr) ? model_object->print_order : 0;
+    }
 
-    if ((node->m_type & itInstance) == 0)
+    if ((node_type & itInstance) == 0)
         return 0;
 
-    ObjectDataViewModelNode* instance_root = node->m_parent;
+    ObjectDataViewModelNode* instance_root = node->GetParent();
     if (instance_root == nullptr)
         return 0;
     ObjectDataViewModelNode* object_node = instance_root->GetParent();
@@ -1763,7 +1766,7 @@ int get_node_print_order(ObjectDataViewModelNode* node)
         return 0;
 
     ModelObject* obj = object_node->m_model_object;
-    const int idx = node->m_idx;
+    const int idx = node->GetIdx();
     if (idx < 0 || size_t(idx) >= obj->instances.size())
         return 0;
     ModelInstance* inst = obj->instances[idx];
