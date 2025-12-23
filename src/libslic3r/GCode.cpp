@@ -2193,8 +2193,8 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
         // In non-sequential print, the printing extruders may have been modified by the extruder switches stored in Model::custom_gcode_per_print_z.
         // Therefore initialize the printing extruders from there.
         this->set_extruders(tool_ordering.all_extruders());
-        const bool custom_instance_order = print.model().has_custom_instance_order();
-        if (custom_instance_order || print.config().print_order == PrintOrder::CustomOrdering)
+        const bool use_custom_instance_order = print.config().print_order == PrintOrder::CustomOrdering;
+        if (use_custom_instance_order)
             print_object_instances_ordering = sort_object_instances_by_custom_order(print);
         else if (print.config().print_order == PrintOrder::AsObjectList)
             print_object_instances_ordering = sort_object_instances_by_model_order(print, true);

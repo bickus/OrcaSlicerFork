@@ -2103,10 +2103,10 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
         std::vector<const PrintInstance*>::const_iterator 	print_object_instance_sequential_active;
         std::vector<std::pair<coordf_t, std::vector<GCode::LayerToPrint>>> layers_to_print = GCode::collect_layers_to_print(*this);
         std::vector<unsigned int> printExtruders;
-        const bool has_custom_instance_order = this->model().has_custom_instance_order() || this->config().print_order == PrintOrder::CustomOrdering;
+        const bool use_custom_instance_order = this->config().print_order == PrintOrder::CustomOrdering;
         if (this->config().print_sequence == PrintSequence::ByObject) {
             // Order object instances for sequential print.
-            print_object_instances_ordering = has_custom_instance_order
+            print_object_instances_ordering = use_custom_instance_order
                 ? sort_object_instances_by_custom_order(*this)
                 : sort_object_instances_by_model_order(*this);
             //        print_object_instances_ordering = sort_object_instances_by_max_z(print);
@@ -2123,7 +2123,7 @@ void Print::process(long long *time_cost_with_cache, bool use_cache)
             tool_ordering.assign_custom_gcodes(*this);
             has_wipe_tower = this->has_wipe_tower() && tool_ordering.has_wipe_tower();
             initial_extruder_id = tool_ordering.first_extruder();
-            if (has_custom_instance_order)
+            if (use_custom_instance_order)
                 print_object_instances_ordering = sort_object_instances_by_custom_order(*this);
             else if (this->config().print_order == PrintOrder::AsObjectList)
                 print_object_instances_ordering = sort_object_instances_by_model_order(*this, true);
