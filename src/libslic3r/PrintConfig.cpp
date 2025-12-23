@@ -220,6 +220,7 @@ CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(PrintSequence)
 static t_config_enum_values s_keys_map_PrintOrder{
     { "default",     int(PrintOrder::Default) },
     { "as_obj_list", int(PrintOrder::AsObjectList)},
+    { "custom",      int(PrintOrder::CustomOrdering)},
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(PrintOrder)
 
