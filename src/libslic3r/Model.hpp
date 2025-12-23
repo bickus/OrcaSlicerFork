@@ -679,7 +679,7 @@ private:
 	}
     template<class Archive> void serialize(Archive& ar) {
         ar(cereal::base_class<ObjectBase>(this));
-        if constexpr (cereal::traits::is_input_archive<Archive>::value) {
+        if constexpr (std::is_base_of_v<cereal::detail::InputArchiveBase, typename std::remove_reference<Archive>::type>) {
             Internal::StaticSerializationWrapper<ModelConfigObject> config_wrapper(config);
             Internal::StaticSerializationWrapper<LayerHeightProfile> layer_heigth_profile_wrapper(layer_height_profile);
             // BBS: add backup, check modify
@@ -702,7 +702,7 @@ private:
             m_bounding_box_exact, m_bounding_box_exact_valid, m_min_max_z_valid,
             m_raw_bounding_box, m_raw_bounding_box_valid, m_raw_mesh_bounding_box, m_raw_mesh_bounding_box_valid,
             cut_connectors, cut_id);
-        if constexpr (cereal::traits::is_input_archive<Archive>::value) {
+        if constexpr (std::is_base_of_v<cereal::detail::InputArchiveBase, typename std::remove_reference<Archive>::type>) {
             std::vector<ObjectID> volume_ids2;
             std::transform(volumes.begin(), volumes.end(), std::back_inserter(volume_ids2), std::mem_fn(&ObjectBase::id));
             if (volume_ids != volume_ids2)
@@ -1404,7 +1404,7 @@ private:
     // BBS. Add added members to archive.
     template<class Archive> void serialize(Archive& ar) {
         ar(m_transformation, print_volume_state, printable, m_assemble_transformation, m_offset_to_assembly, m_assemble_initialized);
-        if constexpr (cereal::traits::is_input_archive<Archive>::value) {
+        if constexpr (std::is_base_of_v<cereal::detail::InputArchiveBase, typename std::remove_reference<Archive>::type>) {
             try {
                 ar(print_order);
             } catch (const cereal::Exception&) {
