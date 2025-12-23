@@ -47,6 +47,7 @@
 #endif
 #include <wx/clrpicker.h>
 #include <wx/tokenzr.h>
+#include <wx/settings.h>
 #include <wx/aui/aui.h>
 
 #include "libslic3r/libslic3r.h"
@@ -11829,14 +11830,20 @@ public:
                     wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
     {
         const int padding = FromDIP(10);
+        const wxColour base_bg = StateColor::darkModeColorFor(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW));
+        SetBackgroundColour(base_bg);
+        SetOwnBackgroundColour(base_bg);
+
         wxBoxSizer* top_sizer = new wxBoxSizer(wxVERTICAL);
 
         if (!message.empty()) {
             auto* message_label = new wxStaticText(this, wxID_ANY, message);
+            message_label->SetBackgroundColour(base_bg);
             top_sizer->Add(message_label, 0, wxEXPAND | wxALL, padding);
         }
 
         auto* prompt_label = new wxStaticText(this, wxID_ANY, prompt);
+        prompt_label->SetBackgroundColour(base_bg);
         top_sizer->Add(prompt_label, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, padding);
 
         const long clamped_value = std::clamp(value, min, max);
