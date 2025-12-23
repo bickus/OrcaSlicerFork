@@ -15208,11 +15208,10 @@ bool Plater::priv::apply_reorder_mode()
     for (const auto& candidate : candidates)
         append_instance(candidate.instance);
 
-    if (desired_order.size() != candidates.size())
-        desired_order.resize(candidates.size());
-
     int order_value = 1;
     for (ModelInstance* inst : desired_order) {
+        if (inst == nullptr)
+            continue;
         inst->arrange_order = order_value;
         inst->print_order   = order_value;
         ++order_value;

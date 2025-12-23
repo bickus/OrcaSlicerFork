@@ -185,9 +185,9 @@ void FillBedJob::prepare()
             ModelObject *mo = m_plater->model().objects[m_object_idx];
             ModelObject *obj;
             if (m_instances) {
-                ModelInstance* model_instance = mo->instances.back();
-                Vec3d offset_vec = model_instance->get_offset() + Vec3d(current_offset, current_offset, 0.0);
-                mo->add_instance(offset_vec, model_instance->get_scaling_factor(), model_instance->get_rotation(), model_instance->get_mirror());
+                ModelInstance* new_instance = mo->add_instance(*mi);
+                Vec3d offset_vec = mi->get_offset() + Vec3d(current_offset, current_offset, 0.0);
+                new_instance->set_offset(offset_vec);
                 obj = mo;
             } else {
                 ModelObject* newObj = m_plater->model().add_object(*mo);

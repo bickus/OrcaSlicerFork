@@ -687,16 +687,11 @@ private:
             SaveObjectGaurd gaurd(*this);
             ar(name, module_name, input_file, instances, volumes, config_wrapper, layer_config_ranges, layer_heigth_profile_wrapper,
                 sla_support_points, sla_points_status, sla_drain_holes, printable);
-            try {
-                ar(print_order);
-            } catch (const cereal::Exception&) {
-                print_order = 0;
-            }
         } else {
             Internal::StaticSerializationWrapper<ModelConfigObject const> config_wrapper(config);
             Internal::StaticSerializationWrapper<LayerHeightProfile const> layer_heigth_profile_wrapper(layer_height_profile);
             ar(name, module_name, input_file, instances, volumes, config_wrapper, layer_config_ranges, layer_heigth_profile_wrapper,
-                sla_support_points, sla_points_status, sla_drain_holes, printable, print_order);
+                sla_support_points, sla_points_status, sla_drain_holes, printable);
         }
         ar(origin_translation, brim_points,
             m_bounding_box_approx, m_bounding_box_approx_valid, 
@@ -709,6 +704,15 @@ private:
             if (volume_ids != volume_ids2)
                 Slic3r::save_object_mesh(*this);
             volume_ids.clear();
+        }
+        if constexpr (std::is_base_of_v<cereal::detail::InputArchiveBase, typename std::remove_reference<Archive>::type>) {
+            try {
+                ar(print_order);
+            } catch (const cereal::Exception&) {
+                print_order = 0;
+            }
+        } else {
+            ar(print_order);
         }
     }
 
