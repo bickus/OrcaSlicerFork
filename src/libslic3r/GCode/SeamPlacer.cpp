@@ -1563,7 +1563,7 @@ void SeamPlacer::init(const Print &print, std::function<void(void)> throw_if_can
   for (const PrintObject *po : print.objects()) {
     throw_if_canceled_func();
     SeamPosition configured_seam_preference = po->config().seam_position.value;
-    const float seam_overhang_distance = float(po->print()->config().seam_to_overhang_distance);
+    const float seam_overhang_distance = float(po->config().seam_to_overhang_distance);
     SeamComparator comparator { configured_seam_preference, seam_overhang_distance };
 
     {
@@ -1651,7 +1651,7 @@ void SeamPlacer::place_seam(const Layer *layer, ExtrusionLoop &loop,
     return current;
   };
 
-  const float seam_overhang_distance = float(po->print()->config().seam_to_overhang_distance);
+  const float seam_overhang_distance = float(po->config().seam_to_overhang_distance);
   const PrintObjectSeamData::LayerSeams &layer_perimeters =
       m_seam_per_object.find(layer->object())->second.layers[layer_index];
 
