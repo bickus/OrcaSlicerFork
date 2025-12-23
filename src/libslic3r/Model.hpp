@@ -19,7 +19,6 @@
 #include "TextConfiguration.hpp"
 #include "EmbossShape.hpp"
 #include "TriangleSelector.hpp"
-#include <cereal/cereal.hpp>
 
 //BBS: add bbs 3mf
 #include "Format/bbs_3mf.hpp"
@@ -677,40 +676,40 @@ private:
         assert(this->config.id().invalid());
         assert(this->layer_height_profile.id().invalid());
 	}
-    template<class Archive> void serialize(Archive& ar) {
+    template<class Archive> void save(Archive& ar) const {
         ar(cereal::base_class<ObjectBase>(this));
-        if constexpr (cereal::traits::is_input_archive<Archive>::value) {
-            Internal::StaticSerializationWrapper<ModelConfigObject> config_wrapper(config);
-            Internal::StaticSerializationWrapper<LayerHeightProfile> layer_heigth_profile_wrapper(layer_height_profile);
-            // BBS: add backup, check modify
-            SaveObjectGaurd gaurd(*this);
-            ar(name, module_name, input_file, instances, volumes, config_wrapper, layer_config_ranges, layer_heigth_profile_wrapper,
-                sla_support_points, sla_points_status, sla_drain_holes, printable);
-            try {
-                ar(print_order);
-            } catch (const cereal::Exception&) {
-                print_order = 0;
-            }
-        } else {
-            Internal::StaticSerializationWrapper<ModelConfigObject const> config_wrapper_const(config);
-            Internal::StaticSerializationWrapper<LayerHeightProfile const> layer_profile_const(layer_height_profile);
-            ar(name, module_name, input_file, instances, volumes, config_wrapper_const, layer_config_ranges, layer_profile_const,
-                sla_support_points, sla_points_status, sla_drain_holes, printable, print_order);
+        Internal::StaticSerializationWrapper<ModelConfigObject const> config_wrapper(config);
+        Internal::StaticSerializationWrapper<LayerHeightProfile const> layer_heigth_profile_wrapper(layer_height_profile);
+        ar(name, module_name, input_file, instances, volumes, config_wrapper, layer_config_ranges, layer_heigth_profile_wrapper,
+            sla_support_points, sla_points_status, sla_drain_holes, printable, print_order, origin_translation, brim_points,
+            m_bounding_box_approx, m_bounding_box_approx_valid, 
+            m_bounding_box_exact, m_bounding_box_exact_valid, m_min_max_z_valid,
+            m_raw_bounding_box, m_raw_bounding_box_valid, m_raw_mesh_bounding_box, m_raw_mesh_bounding_box_valid,
+            cut_connectors, cut_id);
+    }
+    template<class Archive> void load(Archive& ar) {
+        ar(cereal::base_class<ObjectBase>(this));
+        Internal::StaticSerializationWrapper<ModelConfigObject> config_wrapper(config);
+        Internal::StaticSerializationWrapper<LayerHeightProfile> layer_heigth_profile_wrapper(layer_height_profile);
+        // BBS: add backup, check modify
+        SaveObjectGaurd gaurd(*this);
+        ar(name, module_name, input_file, instances, volumes, config_wrapper, layer_config_ranges, layer_heigth_profile_wrapper,
+            sla_support_points, sla_points_status, sla_drain_holes, printable);
+        try {
+            ar(print_order);
+        } catch (const cereal::Exception&) {
+            print_order = 0;
         }
-
         ar(origin_translation, brim_points,
             m_bounding_box_approx, m_bounding_box_approx_valid, 
             m_bounding_box_exact, m_bounding_box_exact_valid, m_min_max_z_valid,
             m_raw_bounding_box, m_raw_bounding_box_valid, m_raw_mesh_bounding_box, m_raw_mesh_bounding_box_valid,
             cut_connectors, cut_id);
-
-        if constexpr (cereal::traits::is_input_archive<Archive>::value) {
-            std::vector<ObjectID> volume_ids2;
-            std::transform(volumes.begin(), volumes.end(), std::back_inserter(volume_ids2), std::mem_fn(&ObjectBase::id));
-            if (volume_ids != volume_ids2)
-                Slic3r::save_object_mesh(*this);
-            volume_ids.clear();
-        }
+        std::vector<ObjectID> volume_ids2;
+        std::transform(volumes.begin(), volumes.end(), std::back_inserter(volume_ids2), std::mem_fn(&ObjectBase::id));
+        if (volume_ids != volume_ids2)
+            Slic3r::save_object_mesh(*this);
+        volume_ids.clear();
     }
 
     // Called by Print::validate() from the UI thread.
@@ -1404,16 +1403,15 @@ private:
 	// Used for deserialization, therefore no IDs are allocated.
 	ModelInstance() : ObjectBase(-1), object(nullptr) { assert(this->id().invalid()); }
     // BBS. Add added members to archive.
-    template<class Archive> void serialize(Archive& ar) {
+    template<class Archive> void save(Archive& ar) const {
+        ar(m_transformation, print_volume_state, printable, m_assemble_transformation, m_offset_to_assembly, m_assemble_initialized, print_order);
+    }
+    template<class Archive> void load(Archive& ar) {
         ar(m_transformation, print_volume_state, printable, m_assemble_transformation, m_offset_to_assembly, m_assemble_initialized);
-        if constexpr (cereal::traits::is_input_archive<Archive>::value) {
-            try {
-                ar(print_order);
-            } catch (const cereal::Exception&) {
-                print_order = 0;
-            }
-        } else {
+        try {
             ar(print_order);
+        } catch (const cereal::Exception&) {
+            print_order = 0;
         }
     }
 };
