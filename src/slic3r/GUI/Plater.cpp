@@ -11864,6 +11864,8 @@ public:
 
     long GetValue() const { return static_cast<long>(m_spinner->GetValue()); }
 
+    void on_dpi_changed(const wxRect& suggested_rect) override {}
+
 private:
     SpinInput* m_spinner { nullptr };
 };
