@@ -134,6 +134,8 @@
 #include "RenamedProfilesDialog.hpp"
 #include "libslic3r/PresetRenameHistory.hpp"
 #include "Widgets/Button.hpp"
+#include "Widgets/DialogButtons.hpp"
+#include "Widgets/SpinInput.hpp"
 
 #include "GUI_ObjectTable.hpp"
 #include "libslic3r/Thread.hpp"
@@ -11812,19 +11814,21 @@ void Plater::decrease_instances(size_t num)
 
 namespace {
 
-class NumberEntryDialog : public wxDialog
+class CopiesCountDialog : public DPIDialog
 {
 public:
-    NumberEntryDialog(wxWindow* parent,
+    CopiesCountDialog(wxWindow* parent,
                       const wxString& message,
                       const wxString& prompt,
                       const wxString& title,
                       long value,
                       long min,
                       long max)
-        : wxDialog(parent, wxID_ANY, title, wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+        : DPIDialog(parent ? parent : static_cast<wxWindow *>(wxGetApp().mainframe),
+                    wxID_ANY, title, wxDefaultPosition, wxDefaultSize,
+                    wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
     {
-        const int padding = wxGetApp().em_unit() / 2;
+        const int padding = FromDIP(10);
         wxBoxSizer* top_sizer = new wxBoxSizer(wxVERTICAL);
 
         if (!message.empty()) {
@@ -11835,28 +11839,33 @@ public:
         auto* prompt_label = new wxStaticText(this, wxID_ANY, prompt);
         top_sizer->Add(prompt_label, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, padding);
 
-        m_spinner = new wxSpinCtrl(this, wxID_ANY);
         const long clamped_value = std::clamp(value, min, max);
-        m_spinner->SetRange(static_cast<int>(min), static_cast<int>(max));
-        m_spinner->SetValue(static_cast<int>(clamped_value));
+        m_spinner = new SpinInput(this, wxEmptyString, "", wxDefaultPosition,
+                                  wxSize(FromDIP(160), -1), wxSP_ARROW_KEYS,
+                                  static_cast<int>(min), static_cast<int>(max),
+                                  static_cast<int>(clamped_value));
+        m_spinner->SetCornerRadius(FromDIP(6));
         top_sizer->Add(m_spinner, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, padding);
 
-        top_sizer->AddSpacer(padding);
-        if (auto* buttons = CreateSeparatedButtonSizer(wxOK | wxCANCEL))
-            top_sizer->Add(buttons, 0, wxEXPAND | wxALL, padding);
+        auto* buttons = new DialogButtons(this, {"OK", "Cancel"});
+        buttons->GetOK()->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_OK); });
+        buttons->GetCANCEL()->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { EndModal(wxID_CANCEL); });
+        top_sizer->Add(buttons, 0, wxEXPAND | wxALL, padding);
 
         SetSizerAndFit(top_sizer);
         CentreOnParent();
 
         wxGetApp().UpdateDlgDarkUI(this);
-        m_spinner->SetFocus();
-        m_spinner->SelectAll();
+        if (auto* text = m_spinner->GetTextCtrl()) {
+            text->SetFocus();
+            text->SelectAll();
+        }
     }
 
     long GetValue() const { return static_cast<long>(m_spinner->GetValue()); }
 
 private:
-    wxSpinCtrl* m_spinner { nullptr };
+    SpinInput* m_spinner { nullptr };
 };
 
 } // namespace
@@ -11869,7 +11878,7 @@ static long GetNumberFromUser(  const wxString& msg,
                                 long max,
                                 wxWindow* parent)
 {
-    NumberEntryDialog dialog(parent, msg, prompt, title, value, min, max);
+    CopiesCountDialog dialog(parent, msg, prompt, title, value, min, max);
     return dialog.ShowModal() == wxID_OK ? dialog.GetValue() : -1;
 }
 
