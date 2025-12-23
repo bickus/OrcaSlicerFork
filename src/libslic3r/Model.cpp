@@ -1075,6 +1075,19 @@ bool Model::is_fuzzy_skin_painted() const
     return std::any_of(this->objects.cbegin(), this->objects.cend(), [](const ModelObject *mo) { return mo->is_fuzzy_skin_painted(); });
 }
 
+bool Model::has_custom_instance_order() const
+{
+    for (const ModelObject* object : this->objects) {
+        if (object == nullptr)
+            continue;
+        for (const ModelInstance* instance : object->instances) {
+            if (instance != nullptr && instance->print_order > 0)
+                return true;
+        }
+    }
+    return false;
+}
+
 
 static void add_cut_volume(TriangleMesh& mesh, ModelObject* object, const ModelVolume* src_volume, const Transform3d& cut_matrix, const std::string& suffix = {}, ModelVolumeType type = ModelVolumeType::MODEL_PART)
 {

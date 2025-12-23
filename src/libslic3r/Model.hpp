@@ -1700,6 +1700,8 @@ public:
     bool          is_mm_painted() const;
     // Checks if any of objects is painted using the fuzzy skin painting gizmo.
     bool          is_fuzzy_skin_painted() const;
+    bool          has_custom_instance_order() const;
+
 
     std::unique_ptr<CalibPressureAdvancePattern> calib_pa_pattern;
 
