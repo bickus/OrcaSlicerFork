@@ -1417,8 +1417,10 @@ void PrintConfigDef::init_fff_params()
     def->enum_keys_map = &ConfigOptionEnum<PrintOrder>::get_enum_values();
     def->enum_values.push_back("default");
     def->enum_values.push_back("as_obj_list");
+    def->enum_values.push_back("custom");
     def->enum_labels.push_back(L("Default"));
     def->enum_labels.push_back(L("As object list"));
+    def->enum_labels.push_back(L("Custom ordering"));
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<PrintOrder>(PrintOrder::Default));
 

@@ -477,7 +477,7 @@ void ObjectList::update_print_order_column_visibility()
     bool show_column = false;
     const auto* print_order_opt = wxGetApp().preset_bundle->prints.get_edited_preset().config.option<ConfigOptionEnum<PrintOrder>>("print_order");
     if (print_order_opt != nullptr)
-        show_column = print_order_opt->value == PrintOrder::AsObjectList;
+        show_column = print_order_opt->value == PrintOrder::CustomOrdering;
 
     wxDataViewColumn* column = GetColumn(colPrintOrder);
     if (column == nullptr)

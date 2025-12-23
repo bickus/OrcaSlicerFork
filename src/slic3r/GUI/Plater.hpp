@@ -191,6 +191,7 @@ public:
     void                    finish_param_edit();
     void                    toggle_reorder_mode();
     void                    apply_reorder_changes();
+    void                    clear_reorder_numbers();
     void                    update_reorder_apply_state();
     void                    force_end_reorder_mode();
     void                    auto_calc_flushing_volumes(const int modify_id);
@@ -542,6 +543,7 @@ public:
     bool start_reorder_mode();
     bool cancel_reorder_mode();
     bool apply_reorder_mode();
+    bool clear_reorder_assignments();
     bool handle_reorder_pick(int object_idx, int instance_idx);
     bool is_reorder_mode_active() const;
     size_t reorder_assignment_count() const;
