@@ -2358,17 +2358,24 @@ public:
 // Plater / private
 struct ObjectReorderState
 {
+    struct InstanceCandidate
+    {
+        ModelObject*   object { nullptr };
+        ModelInstance* instance { nullptr };
+        size_t         object_index { 0 };
+        size_t         instance_index { 0 };
+    };
+
     int plate_index{ -1 };
-    std::vector<ModelObject*> ordered_candidates;
-    std::unordered_set<ModelObject*> candidates_lookup;
-    std::unordered_map<ModelObject*, size_t> assigned_order;
-    std::vector<ModelObject*> sequence;
-    std::unordered_map<ModelObject*, const ModelInstance*> primary_instances;
+    std::vector<InstanceCandidate> ordered_candidates;
+    std::unordered_set<ModelInstance*> candidates_lookup;
+    std::unordered_map<ModelInstance*, size_t> assigned_order;
+    std::vector<ModelInstance*> sequence;
     std::vector<Plater::ReorderLabel> overlay_labels;
     bool previous_labels_shown{ false };
     bool forced_labels{ false };
 
-    bool contains(ModelObject* obj) const { return candidates_lookup.find(obj) != candidates_lookup.end(); }
+    bool contains(ModelInstance* inst) const { return candidates_lookup.find(inst) != candidates_lookup.end(); }
 
     void refresh_overlay_labels()
     {
@@ -2376,12 +2383,11 @@ struct ObjectReorderState
         assigned_order.clear();
         overlay_labels.reserve(sequence.size());
         for (size_t idx = 0; idx < sequence.size(); ++idx) {
-            ModelObject* obj = sequence[idx];
-            assigned_order[obj] = idx + 1;
-            auto it_inst = primary_instances.find(obj);
-            if (it_inst == primary_instances.end() || it_inst->second == nullptr)
+            ModelInstance* inst = sequence[idx];
+            if (inst == nullptr)
                 continue;
-            overlay_labels.push_back(Plater::ReorderLabel { it_inst->second->id().id, std::to_string(idx + 1) });
+            assigned_order[inst] = idx + 1;
+            overlay_labels.push_back(Plater::ReorderLabel { inst->id().id, std::to_string(idx + 1) });
         }
     }
 };
@@ -2395,7 +2401,7 @@ struct Plater::priv
     bool start_reorder_mode();
     bool cancel_reorder_mode();
     bool apply_reorder_mode();
-    bool handle_reorder_pick(int object_idx);
+    bool handle_reorder_pick(int object_idx, int instance_idx);
     bool is_reorder_mode_active() const;
     size_t reorder_assignment_count() const;
     int reorder_plate_index() const;
@@ -11692,8 +11698,6 @@ void Plater::remove_selected()
 
 void Plater::increase_instances(size_t num)
 {
-    // BBS
-#if 0
     if (! can_increase_instances()) { return; }
 
     Plater::TakeSnapshot snapshot(this, "Increase Instances");
@@ -11726,13 +11730,14 @@ void Plater::increase_instances(size_t num)
 
     p->selection_changed();
     this->p->schedule_background_process();
-#endif
+    if (wxGetApp().app_config->get("auto_arrange") == "true") {
+        this->set_prepare_state(Job::PREPARE_STATE_MENU);
+        this->arrange();
+    }
 }
 
 void Plater::decrease_instances(size_t num)
 {
-    // BBS
-#if 0
     if (! can_decrease_instances()) { return; }
 
     Plater::TakeSnapshot snapshot(this, "Decrease Instances");
@@ -11756,7 +11761,10 @@ void Plater::decrease_instances(size_t num)
 
     p->selection_changed();
     this->p->schedule_background_process();
-#endif
+    if (wxGetApp().app_config->get("auto_arrange") == "true") {
+        this->set_prepare_state(Job::PREPARE_STATE_MENU);
+        this->arrange();
+    }
 }
 
 static long GetNumberFromUser(  const wxString& msg,
@@ -11801,12 +11809,21 @@ void Plater::set_number_of_copies(/*size_t num*/)
         decrease_instances(-diff);
 }
 
-void Plater::fill_bed_with_instances()
+void Plater::fill_bed_with_copies()
 {
     auto &w = get_ui_job_worker();
     if (w.is_idle()) {
         p->take_snapshot(_u8L("Arrange"));
         replace_job(w, std::make_unique<FillBedJob>());
+    }
+}
+
+void Plater::fill_bed_with_instances()
+{
+    auto &w = get_ui_job_worker();
+    if (w.is_idle()) {
+        p->take_snapshot(_u8L("Arrange"));
+        replace_job(w, std::make_unique<FillBedJob>(true));
     }
 }
 
@@ -14986,21 +15003,17 @@ bool Plater::priv::start_reorder_mode()
     auto state = std::make_unique<ObjectReorderState>();
     state->plate_index = partplate_list.get_curr_plate_index();
 
-    for (size_t idx = 0; idx < model.objects.size(); ++idx) {
-        ModelObject* obj = model.objects[idx];
-        const ModelInstance* primary = nullptr;
+    for (size_t obj_idx = 0; obj_idx < model.objects.size(); ++obj_idx) {
+        ModelObject* obj = model.objects[obj_idx];
         for (size_t inst_idx = 0; inst_idx < obj->instances.size(); ++inst_idx) {
-            if (plate->contain_instance(idx, inst_idx)) {
-                primary = obj->instances[inst_idx];
-                break;
-            }
+            if (!plate->contain_instance(obj_idx, inst_idx))
+                continue;
+            ModelInstance* inst = obj->instances[inst_idx];
+            if (inst == nullptr)
+                continue;
+            state->ordered_candidates.push_back(ObjectReorderState::InstanceCandidate{ obj, inst, obj_idx, inst_idx });
+            state->candidates_lookup.insert(inst);
         }
-        if (primary == nullptr)
-            continue;
-
-        state->ordered_candidates.push_back(obj);
-        state->candidates_lookup.insert(obj);
-        state->primary_instances[obj] = primary;
     }
 
     if (state->ordered_candidates.empty())
@@ -15027,20 +15040,24 @@ bool Plater::priv::cancel_reorder_mode()
     return true;
 }
 
-bool Plater::priv::handle_reorder_pick(int object_idx)
+bool Plater::priv::handle_reorder_pick(int object_idx, int instance_idx)
 {
     if (!reorder_state || object_idx < 0 || size_t(object_idx) >= model.objects.size())
         return false;
 
     ModelObject* obj = model.objects[object_idx];
-    if (!reorder_state->contains(obj))
+    if (obj == nullptr || instance_idx < 0 || size_t(instance_idx) >= obj->instances.size())
         return false;
 
-    auto it = std::find(reorder_state->sequence.begin(), reorder_state->sequence.end(), obj);
+    ModelInstance* instance = obj->instances[instance_idx];
+    if (instance == nullptr || !reorder_state->contains(instance))
+        return false;
+
+    auto it = std::find(reorder_state->sequence.begin(), reorder_state->sequence.end(), instance);
     if (it != reorder_state->sequence.end())
         reorder_state->sequence.erase(it);
     else
-        reorder_state->sequence.push_back(obj);
+        reorder_state->sequence.push_back(instance);
 
     reorder_state->refresh_overlay_labels();
     q->set_current_canvas_as_dirty();
@@ -15058,26 +15075,47 @@ bool Plater::priv::apply_reorder_mode()
     if (candidates.empty())
         return false;
 
+    std::vector<ModelInstance*> desired_order;
+    desired_order.reserve(candidates.size());
+    auto append_instance = [&](ModelInstance* inst) {
+        if (inst == nullptr)
+            return;
+        if (std::find(desired_order.begin(), desired_order.end(), inst) == desired_order.end())
+            desired_order.push_back(inst);
+    };
+
+    for (ModelInstance* inst : reorder_state->sequence)
+        append_instance(inst);
+    for (const auto& candidate : candidates)
+        append_instance(candidate.instance);
+
+    if (desired_order.size() != candidates.size())
+        desired_order.resize(candidates.size());
+
+    int order_value = 1;
+    for (ModelInstance* inst : desired_order)
+        inst->arrange_order = order_value++;
+
+    std::unordered_map<ModelObject*, int> object_min_order;
+    object_min_order.reserve(model.objects.size());
+    for (const auto& candidate : candidates) {
+        if (candidate.object == nullptr || candidate.instance == nullptr)
+            continue;
+        const int inst_order = candidate.instance->arrange_order;
+        auto it = object_min_order.find(candidate.object);
+        if (it == object_min_order.end() || inst_order < it->second)
+            object_min_order[candidate.object] = inst_order;
+    }
+
     std::vector<size_t> indices;
-    indices.reserve(candidates.size());
+    indices.reserve(model.objects.size());
     for (size_t idx = 0; idx < model.objects.size(); ++idx) {
-        if (reorder_state->candidates_lookup.count(model.objects[idx]) > 0)
+        if (object_min_order.find(model.objects[idx]) != object_min_order.end())
             indices.push_back(idx);
     }
 
     if (indices.empty())
         return false;
-
-    std::vector<ModelObject*> desired_order;
-    desired_order.reserve(indices.size());
-    desired_order.insert(desired_order.end(), reorder_state->sequence.begin(), reorder_state->sequence.end());
-    for (ModelObject* obj : candidates) {
-        if (std::find(reorder_state->sequence.begin(), reorder_state->sequence.end(), obj) == reorder_state->sequence.end())
-            desired_order.push_back(obj);
-    }
-
-    if (desired_order.size() != indices.size())
-        desired_order.resize(indices.size());
 
     std::vector<size_t> sorted_indices = indices;
     std::sort(sorted_indices.begin(), sorted_indices.end());
@@ -15086,6 +15124,7 @@ bool Plater::priv::apply_reorder_mode()
     positions.reserve(model.objects.size());
     for (size_t i = 0; i < model.objects.size(); ++i)
         positions[model.objects[i]] = i;
+    auto positions_before = positions;
 
     auto move_object = [&](size_t from_idx, size_t to_idx, std::set<size_t>& touched_indices) {
         if (from_idx == to_idx)
@@ -15107,9 +15146,23 @@ bool Plater::priv::apply_reorder_mode()
 
     std::set<size_t> touched_indices;
 
+    std::vector<ModelObject*> desired_objects;
+    desired_objects.reserve(indices.size());
+    for (ModelObject* obj : model.objects) {
+        if (object_min_order.find(obj) != object_min_order.end())
+            desired_objects.push_back(obj);
+    }
+    std::sort(desired_objects.begin(), desired_objects.end(), [&](ModelObject* lhs, ModelObject* rhs) {
+        int lhs_order = object_min_order[lhs];
+        int rhs_order = object_min_order[rhs];
+        if (lhs_order != rhs_order)
+            return lhs_order < rhs_order;
+        return positions_before[lhs] < positions_before[rhs];
+    });
+
     Plater::TakeSnapshot snapshot(q, "Reorder object list");
-    for (size_t i = 0; i < desired_order.size(); ++i) {
-        ModelObject* obj = desired_order[i];
+    for (size_t i = 0; i < desired_objects.size() && i < sorted_indices.size(); ++i) {
+        ModelObject* obj = desired_objects[i];
         size_t target_pos = sorted_indices[i];
         auto it = positions.find(obj);
         if (it == positions.end())
@@ -15167,9 +15220,9 @@ bool Plater::apply_reorder_mode()
     return p->apply_reorder_mode();
 }
 
-bool Plater::handle_reorder_pick(int object_idx)
+bool Plater::handle_reorder_pick(int object_idx, int instance_idx)
 {
-    return p->handle_reorder_pick(object_idx);
+    return p->handle_reorder_pick(object_idx, instance_idx);
 }
 
 bool Plater::is_reorder_mode_active() const
