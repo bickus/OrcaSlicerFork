@@ -1020,10 +1020,10 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip = L("Controls the density (spacing) of external bridge lines. 100% means solid bridge. Default is 100%.\n\n"
                      "Lower density external bridges can help improve reliability as there is more space for air to circulate "
-                     "around the extruded bridge, improving its cooling speed.");
+                     "around the extruded bridge, improving its cooling speed. Maximum is 180% for additional overlap when needed.");
     def->sidetext = "%";
     def->min = 10;
-    def->max = 100;
+    def->max = 180;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionPercent(100));
 
@@ -1032,12 +1032,12 @@ void PrintConfigDef::init_fff_params()
     def->category = L("Strength");
     def->tooltip = L("Controls the density (spacing) of internal bridge lines. 100% means solid bridge. Default is 100%.\n\n"
                      "Lower density internal bridges can help reduce top surface pillowing and improve internal bridge reliability as there is more space for "
-                     "air to circulate around the extruded bridge, improving its cooling speed.\n\n"
+                     "air to circulate around the extruded bridge, improving its cooling speed. Densities up to 180% can be used where overlapping lines are desired.\n\n"
                      "This option works particularly well when combined with the second internal bridge over infill option, "
                      "further improving internal bridging structure before solid infill is extruded.");
     def->sidetext = "%";
     def->min = 10;
-    def->max = 100;
+    def->max = 180;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionPercent(100));
 
