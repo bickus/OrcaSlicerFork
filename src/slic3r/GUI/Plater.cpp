@@ -15110,8 +15110,6 @@ bool Plater::priv::start_reorder_mode()
     for (size_t obj_idx = 0; obj_idx < model.objects.size(); ++obj_idx) {
         ModelObject* obj = model.objects[obj_idx];
         for (size_t inst_idx = 0; inst_idx < obj->instances.size(); ++inst_idx) {
-            if (!plate->contain_instance(obj_idx, inst_idx))
-                continue;
             ModelInstance* inst = obj->instances[inst_idx];
             if (inst == nullptr)
                 continue;
