@@ -4833,6 +4833,12 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
             if (msg.ShowModal() == wxID_YES) {}
         }
     }
+
+    // Ensure all instances are registered with plates for reordering functionality
+    if (load_model) {
+        partplate_list.reload_all_objects();
+    }
+
     return obj_idxs;
 }
 
