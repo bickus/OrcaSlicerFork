@@ -15169,7 +15169,15 @@ bool Plater::priv::handle_reorder_pick(int object_idx, int instance_idx)
         return false;
 
     ModelInstance* instance = obj->instances[instance_idx];
-    if (instance == nullptr || !reorder_state->contains(instance))
+    if (instance == nullptr)
+        return false;
+
+    // Ensure the instance is on the current plate
+    PartPlate* plate = partplate_list.get_curr_plate();
+    if (plate == nullptr || !plate->contain_instance(object_idx, instance_idx))
+        return false;
+
+    if (!reorder_state->contains(instance))
         return false;
 
     auto it = std::find(reorder_state->sequence.begin(), reorder_state->sequence.end(), instance);
