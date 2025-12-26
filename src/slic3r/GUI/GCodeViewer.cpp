@@ -1220,6 +1220,13 @@ void GCodeViewer::append_segmented_move(const GCodeProcessorResult::MoveVertex& 
     }
 }
 
+const GCodeProcessorResult::MoveVertex& GCodeViewer::render_move_at(size_t idx) const
+{
+    if (!m_preview_moves.empty())
+        return m_preview_moves[idx];
+    return m_gcode_result->moves[idx];
+}
+
 void GCodeViewer::refresh(const GCodeProcessorResult& gcode_result, const std::vector<std::string>& str_tool_colors)
 {
 #if ENABLE_GCODE_VIEWER_STATISTICS
@@ -3573,7 +3580,7 @@ m_no_render_path = false;
                             if (buffer.render_primitive_type == TBuffer::ERenderPrimitiveType::Line) {
                                 for (size_t i = sub_path.first.s_id + 1; i < m_sequential_view.current.last + 1; i++) {
                                     size_t move_id = m_ssid_to_moveid_map[i];
-                                    const GCodeProcessorResult::MoveVertex& curr = m_gcode_result->moves[move_id];
+                                    const GCodeProcessorResult::MoveVertex& curr = render_move_at(move_id);
                                     if (curr.is_arc_move()) {
                                         offset += curr.interpolation_points.size();
                                     }
@@ -3585,7 +3592,7 @@ m_no_render_path = false;
                                 // BBS: modify to support moves which has internal point
                                 for (size_t i = sub_path.first.s_id + 1; i < m_sequential_view.current.last + 1; i++) {
                                     size_t move_id = m_ssid_to_moveid_map[i];
-                                    const GCodeProcessorResult::MoveVertex& curr = m_gcode_result->moves[move_id];
+                                    const GCodeProcessorResult::MoveVertex& curr = render_move_at(move_id);
                                     if (curr.is_arc_move()) {
                                         offset += curr.interpolation_points.size();
                                     }
@@ -3683,7 +3690,7 @@ m_no_render_path = false;
             unsigned int segments_count = max_s_id - min_s_id;
             for (size_t i = min_s_id + 1; i < max_s_id + 1; i++) {
                 size_t move_id = m_ssid_to_moveid_map[i];
-                const GCodeProcessorResult::MoveVertex& curr = m_gcode_result->moves[move_id];
+                const GCodeProcessorResult::MoveVertex& curr = render_move_at(move_id);
                 if (curr.is_arc_move()) {
                     segments_count += curr.interpolation_points.size();
                 }

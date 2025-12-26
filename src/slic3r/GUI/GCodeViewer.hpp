@@ -902,6 +902,7 @@ private:
         const BuildVolume& build_volume, const std::vector<BoundingBoxf3>& exclude_bounding_box);
     void rebuild_preview_moves(const GCodeProcessorResult& gcode_result);
     void append_segmented_move(const GCodeProcessorResult::MoveVertex& move, Vec3f start_position);
+    const GCodeProcessorResult::MoveVertex& render_move_at(size_t idx) const;
     //BBS: always load shell at preview
     //void load_shells(const Print& print);
     void refresh_render_paths(bool keep_sequential_current_first, bool keep_sequential_current_last) const;
