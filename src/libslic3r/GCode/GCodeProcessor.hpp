@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <array>
+#include <cmath>
 #include <vector>
 #include <mutex>
 #include <string>
@@ -207,6 +208,48 @@ class Print;
             }
             bool is_arc_move() const {
                 return move_path_type == EMovePathType::Arc_move_ccw || move_path_type == EMovePathType::Arc_move_cw;
+            }
+            float requested_speed() const {
+                return (kinematics.requested_speed > 0.0f) ? kinematics.requested_speed : feedrate;
+            }
+            float actual_entry_speed() const {
+                return kinematics.has_kinematics ? kinematics.entry_speed : requested_speed();
+            }
+            float actual_exit_speed() const {
+                return kinematics.has_kinematics ? kinematics.exit_speed : requested_speed();
+            }
+            float actual_peak_speed() const {
+                return kinematics.has_kinematics ? kinematics.peak_speed : requested_speed();
+            }
+            float actual_speed_at(float distance_along) const {
+                const float total = std::max(travel_dist, 0.0f);
+                if (total <= 0.0f)
+                    return actual_peak_speed();
+
+                const float distance = std::clamp(distance_along, 0.0f, total);
+                if (!kinematics.has_kinematics)
+                    return actual_peak_speed();
+
+                auto solve_speed = [](float v0, float v1, float length, float d) -> float {
+                    constexpr float kMinLength = 1e-6f;
+                    const float segment = std::max(length, kMinLength);
+                    const float accel = (v1 * v1 - v0 * v0) / (2.0f * segment);
+                    const float clamped_dist = std::clamp(d, 0.0f, segment);
+                    const float value_sq = v0 * v0 + 2.0f * accel * clamped_dist;
+                    return std::sqrt(std::max(0.0f, value_sq));
+                };
+
+                const float accel_len = std::max(0.0f, kinematics.accelerate_distance);
+                const float cruise_len = std::max(0.0f, kinematics.cruise_distance);
+                const float decel_len = std::max(0.0f, kinematics.decelerate_distance);
+                const float accel_end = accel_len;
+                const float decel_start = total - decel_len;
+
+                if (distance <= accel_end)
+                    return solve_speed(actual_entry_speed(), actual_peak_speed(), accel_len, distance);
+                if (distance < decel_start)
+                    return actual_peak_speed();
+                return solve_speed(actual_peak_speed(), actual_exit_speed(), decel_len, distance - decel_start);
             }
         };
 

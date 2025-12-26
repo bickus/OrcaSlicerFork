@@ -66,6 +66,8 @@ static std::string get_view_type_string(GCodeViewer::EViewType view_type)
         return _u8L("Line Width");
     else if (view_type == GCodeViewer::EViewType::Feedrate)
         return _u8L("Speed");
+else if (view_type == GCodeViewer::EViewType::ActualSpeed)
+    return _u8L("Actual Speed");
     else if (view_type == GCodeViewer::EViewType::FanSpeed)
         return _u8L("Fan Speed");
     else if (view_type == GCodeViewer::EViewType::Temperature)
@@ -104,6 +106,11 @@ static float round_to_bin(const float value)
     // While the scaling factor is not yet large enough to get two integer digits after scaling and rounding:
     for (; value < threshold[i] && i < 4; ++ i) ;
     return std::round(value * scale[i]) * invscale[i];
+}
+
+static float actual_speed_for_move(const GCodeProcessorResult::MoveVertex& move)
+{
+    return move.actual_peak_speed();
 }
 
 // Find an index of a value in a sorted vector, which is in <z-eps, z+eps>.
@@ -176,6 +183,10 @@ bool GCodeViewer::Path::matches(const GCodeProcessorResult::MoveVertex& move) co
     auto matches_percent = [](float value1, float value2, float max_percent) {
         return std::abs(value2 - value1) / value1 <= max_percent;
     };
+    auto matches_actual_speed = [](float current_speed, float move_speed) {
+        const float base = std::max(std::abs(current_speed), 1e-3f);
+        return std::abs(move_speed - current_speed) <= 0.05f * base;
+    };
 
     switch (move.type)
     {
@@ -191,10 +202,12 @@ bool GCodeViewer::Path::matches(const GCodeProcessorResult::MoveVertex& move) co
         return type == move.type && extruder_id == move.extruder_id && cp_color_id == move.cp_color_id && role == move.extrusion_role &&
             move.position.z() <= sub_paths.front().first.position.z() && feedrate == move.feedrate && fan_speed == move.fan_speed &&
             height == round_to_bin(move.height) && width == round_to_bin(move.width) &&
-            matches_percent(volumetric_rate, move.volumetric_rate(), 0.05f) && layer_time == move.layer_duration;
+            matches_percent(volumetric_rate, move.volumetric_rate(), 0.05f) && layer_time == move.layer_duration &&
+            matches_actual_speed(actual_speed, actual_speed_for_move(move));
     }
     case EMoveType::Travel: {
-        return type == move.type && feedrate == move.feedrate && extruder_id == move.extruder_id && cp_color_id == move.cp_color_id;
+        return type == move.type && feedrate == move.feedrate && extruder_id == move.extruder_id && cp_color_id == move.cp_color_id &&
+            matches_actual_speed(actual_speed, actual_speed_for_move(move));
     }
     default: { return false; }
     }
@@ -224,7 +237,7 @@ void GCodeViewer::TBuffer::add_path(const GCodeProcessorResult::MoveVertex& move
     // use rounding to reduce the number of generated paths
     paths.push_back({ move.type, move.extrusion_role, move.delta_extruder,
         round_to_bin(move.height), round_to_bin(move.width),
-        move.feedrate, move.fan_speed, move.temperature,
+        move.feedrate, actual_speed_for_move(move), move.fan_speed, move.temperature,
         move.volumetric_rate(), move.layer_duration, move.extruder_id, move.cp_color_id, { { endpoint, endpoint } } });
 }
 
@@ -358,6 +371,7 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
     std::string height = ImGui::ColorMarkerStart + _u8L("Height: ") + ImGui::ColorMarkerEnd;
     std::string width = ImGui::ColorMarkerStart + _u8L("Width: ") + ImGui::ColorMarkerEnd;
     std::string speed = ImGui::ColorMarkerStart + _u8L("Speed: ") + ImGui::ColorMarkerEnd;
+    std::string actual_speed = ImGui::ColorMarkerStart + _u8L("Actual: ") + ImGui::ColorMarkerEnd;
     std::string flow = ImGui::ColorMarkerStart + _u8L("Flow: ") + ImGui::ColorMarkerEnd;
     std::string layer_time = ImGui::ColorMarkerStart + _u8L("Layer Time: ") + ImGui::ColorMarkerEnd;
     std::string fanspeed = ImGui::ColorMarkerStart + _u8L("Fan: ") + ImGui::ColorMarkerEnd;
@@ -386,6 +400,9 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
         imgui.text(buf);
 
         sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
+        ImGui::PushItemWidth(item_size);
+        imgui.text(buf);
+        sprintf(buf, "%s%.0f", actual_speed.c_str(), m_curr_move.actual_peak_speed());
         ImGui::PushItemWidth(item_size);
         imgui.text(buf);
 
@@ -894,6 +911,7 @@ void GCodeViewer::update_by_mode(ConfigOptionMode mode)
     view_type_items.push_back(EViewType::FeatureType);
     view_type_items.push_back(EViewType::ColorPrint);
     view_type_items.push_back(EViewType::Feedrate);
+    view_type_items.push_back(EViewType::ActualSpeed);
     view_type_items.push_back(EViewType::Height);
     view_type_items.push_back(EViewType::Width);
     view_type_items.push_back(EViewType::VolumetricRate);
@@ -1135,6 +1153,13 @@ void GCodeViewer::refresh(const GCodeProcessorResult& gcode_result, const std::v
             continue;
 
         const GCodeProcessorResult::MoveVertex& curr = gcode_result.moves[i];
+        const bool is_travel_or_extrude = (curr.type == EMoveType::Extrude || curr.type == EMoveType::Travel);
+        if (is_travel_or_extrude) {
+            const float actual_speed = actual_speed_for_move(curr);
+            const unsigned char id = buffer_id(curr.type);
+            if (id < m_buffers.size() && m_buffers[id].visible)
+                m_extrusions.ranges.actual_speed.update_from(actual_speed);
+        }
 
         switch (curr.type)
         {
@@ -1233,6 +1258,10 @@ void GCodeViewer::reset()
     m_print_statistics.reset();
     m_custom_gcode_per_print_z = std::vector<CustomGCode::Item>();
     m_sequential_view.gcode_window.reset();
+    m_sequential_view.gcode_ids.clear();
+    m_sequential_view.gcode_ids.shrink_to_fit();
+    m_sequential_view.actual_speeds.clear();
+    m_sequential_view.actual_speeds.shrink_to_fit();
 #if ENABLE_GCODE_VIEWER_STATISTICS
     m_statistics.reset_all();
 #endif // ENABLE_GCODE_VIEWER_STATISTICS
@@ -2422,10 +2451,13 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
     }
 
     m_sequential_view.gcode_ids.clear();
+    m_sequential_view.actual_speeds.clear();
     for (size_t i = 0; i < gcode_result.moves.size(); ++i) {
         const GCodeProcessorResult::MoveVertex& move = gcode_result.moves[i];
         if (move.type != EMoveType::Seam)
             m_sequential_view.gcode_ids.push_back(move.gcode_id);
+        if (move.type != EMoveType::Seam)
+            m_sequential_view.actual_speeds.push_back(actual_speed_for_move(move));
     }
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__<< boost::format(",m_contained_in_bed %1%\n")%m_contained_in_bed;
 
@@ -3207,6 +3239,7 @@ void GCodeViewer::refresh_render_paths(bool keep_sequential_current_first, bool 
         case EViewType::Height:         { color = m_extrusions.ranges.height.get_color_at(path.height); break; }
         case EViewType::Width:          { color = m_extrusions.ranges.width.get_color_at(path.width); break; }
         case EViewType::Feedrate:       { color = m_extrusions.ranges.feedrate.get_color_at(path.feedrate); break; }
+        case EViewType::ActualSpeed:    { color = m_extrusions.ranges.actual_speed.get_color_at(path.actual_speed); break; }
         case EViewType::FanSpeed:       { color = m_extrusions.ranges.fan_speed.get_color_at(path.fan_speed); break; }
         case EViewType::Temperature:    { color = m_extrusions.ranges.temperature.get_color_at(path.temperature); break; }
         case EViewType::LayerTime:      { color = m_extrusions.ranges.layer_duration.get_color_at(path.layer_time); break; }
@@ -3234,7 +3267,9 @@ void GCodeViewer::refresh_render_paths(bool keep_sequential_current_first, bool 
         return color;
     };
 
-    auto travel_color = [](const Path& path) {
+    auto travel_color = [this](const Path& path) {
+        if (m_view_type == EViewType::ActualSpeed)
+            return m_extrusions.ranges.actual_speed.get_color_at(path.actual_speed);
         return (path.delta_extruder < 0.0f) ? Travel_Colors[2] /* Retract */ :
             ((path.delta_extruder > 0.0f) ? Travel_Colors[1] /* Extrude */ :
                 Travel_Colors[0] /* Move */);
@@ -4876,6 +4911,11 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
         imgui.title(_u8L("Speed (mm/s)"));
         break;
     }
+    case EViewType::ActualSpeed:
+    {
+        imgui.title(_u8L("Actual speed (mm/s)"));
+        break;
+    }
 
     case EViewType::FanSpeed:       { imgui.title(_u8L("Fan Speed (%)")); break; }
     case EViewType::Temperature:    { imgui.title(_u8L("Temperature (°C)")); break; }
@@ -5027,6 +5067,24 @@ void GCodeViewer::render_legend(float &legend_height, int canvas_width, int canv
         append_item(EItemType::None, Travel_Colors[0], { {_u8L("travel"), offsets[0] }}, true, predictable_icon_pos/*ORCA checkbox_pos*/, travel_visible, [this, travel_visible]() {
             m_buffers[buffer_id(EMoveType::Travel)].visible = !m_buffers[buffer_id(EMoveType::Travel)].visible;
             // update buffers' render paths, and update m_tools.m_tool_colors and m_extrusions.ranges
+            refresh(*m_gcode_result, wxGetApp().plater()->get_extruder_colors_from_plater_config(m_gcode_result));
+            update_moves_slider();
+            wxGetApp().plater()->get_current_canvas3D()->set_as_dirty();
+            });
+        ImGui::PopStyleVar(1);
+        break;
+    }
+    case EViewType::ActualSpeed:       {
+        append_range(m_extrusions.ranges.actual_speed, 0);
+        ImGui::Spacing();
+        ImGui::Dummy({ window_padding, window_padding });
+        ImGui::SameLine();
+        offsets = calculate_offsets({ { _u8L("Options"), { _u8L("Travel")}}, { _u8L("Display"), {""}} }, icon_size);
+        append_headers({ {_u8L("Options"), offsets[0] }, { _u8L("Display"), offsets[1]} });
+        const bool travel_visible = m_buffers[buffer_id(EMoveType::Travel)].visible;
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 3.0f));
+        append_item(EItemType::None, Travel_Colors[0], { {_u8L("travel"), offsets[0] }}, true, predictable_icon_pos/*ORCA checkbox_pos*/, travel_visible, [this, travel_visible]() {
+            m_buffers[buffer_id(EMoveType::Travel)].visible = !m_buffers[buffer_id(EMoveType::Travel)].visible;
             refresh(*m_gcode_result, wxGetApp().plater()->get_extruder_colors_from_plater_config(m_gcode_result));
             update_moves_slider();
             wxGetApp().plater()->get_current_canvas3D()->set_as_dirty();

@@ -217,6 +217,7 @@ class GCodeViewer
         float height{ 0.0f };
         float width{ 0.0f };
         float feedrate{ 0.0f };
+        float actual_speed{ 0.0f };
         float fan_speed{ 0.0f };
         float temperature{ 0.0f };
         float volumetric_rate{ 0.0f };
@@ -430,6 +431,8 @@ class GCodeViewer
             // Color mapping by layer time.
             Range layer_duration;
 Range layer_duration_log;
+            // Color mapping by actual speed (requested fallback when unavailable).
+            Range actual_speed;
             void reset() {
                 height.reset();
                 width.reset();
@@ -439,6 +442,7 @@ Range layer_duration_log;
                 temperature.reset();
                 layer_duration.reset();
                 layer_duration_log.reset(true);
+                actual_speed.reset();
             }
         };
 
@@ -698,6 +702,7 @@ public:
         Marker marker;
         GCodeWindow gcode_window;
         std::vector<unsigned int> gcode_ids;
+        std::vector<float> actual_speeds;
         float m_scale = 1.0;
         bool m_show_marker = false;
         void render(const bool has_render_path, float legend_height, int canvas_width, int canvas_height, int right_margin, const EViewType& view_type);
@@ -715,6 +720,7 @@ public:
         Height,
         Width,
         Feedrate,
+        ActualSpeed,
         FanSpeed,
         Temperature,
         VolumetricRate,
