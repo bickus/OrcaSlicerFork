@@ -389,6 +389,7 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
     const float window_padding = ImGui::GetStyle().WindowPadding.x;
 
     char buf[1024];
+    const bool show_actual_speed_details = (view_type == EViewType::ActualSpeed);
      if (true)
     {
         float startx2 = window_padding + item_size + item_spacing;
@@ -407,40 +408,44 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
         ImGui::PushItemWidth(item_size);
         imgui.text(buf);
 
-        sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
-        ImGui::PushItemWidth(item_size);
-        imgui.text(buf);
-        sprintf(buf, "%s%.0f", actual_speed.c_str(), m_curr_move.actual_peak_speed());
-        ImGui::PushItemWidth(item_size);
-        imgui.text(buf);
-        auto phase_label = [this]() {
-            using Phase = GCodeProcessorResult::MoveVertex::Kinematics::Phase;
-            switch (m_curr_move.kinematics.phase)
-            {
-            case Phase::Acceleration: return _u8L("Acceleration");
-            case Phase::Cruise: return _u8L("Cruise");
-            case Phase::Deceleration: return _u8L("Deceleration");
-            default: return _u8L("Unknown");
-            }
-        }();
-        auto limiter_label = [this]() {
-            using Limiter = GCodeProcessorResult::MoveVertex::LimitingFactor;
-            switch (m_curr_move.kinematics.limiting_factor)
-            {
-            case Limiter::Acceleration: return _u8L("Limited by Acceleration");
-            case Limiter::SCV: return _u8L("Limited by SCV");
-            case Limiter::CruiseRatio: return _u8L("Limited by Cruise Ratio");
-            case Limiter::Lookahead: return _u8L("Limited by Lookahead");
-            case Limiter::Prepare: return _u8L("Limited by Prepare Stage");
-            default: return _u8L("Limited by Request");
-            }
-        }();
-        sprintf(buf, "%s%s", phase.c_str(), phase_label.c_str());
-        ImGui::PushItemWidth(item_size);
-        imgui.text(buf);
-        sprintf(buf, "%s%s", limiter.c_str(), limiter_label.c_str());
-        ImGui::PushItemWidth(item_size);
-        imgui.text(buf);
+        if (show_actual_speed_details) {
+            sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
+            ImGui::PushItemWidth(item_size);
+            imgui.text(buf);
+            sprintf(buf, "%s%.0f", actual_speed.c_str(), m_curr_move.actual_peak_speed());
+            ImGui::PushItemWidth(item_size);
+            imgui.text(buf);
+            auto phase_label = [this]() {
+                using Phase = GCodeProcessorResult::MoveVertex::Kinematics::Phase;
+                switch (m_curr_move.kinematics.phase)
+                {
+                case Phase::Acceleration: return _u8L("Acceleration");
+                case Phase::Cruise: return _u8L("Cruise");
+                case Phase::Deceleration: return _u8L("Deceleration");
+                default: return _u8L("Unknown");
+                }
+            }();
+            auto limiter_label = [this]() {
+                using Limiter = GCodeProcessorResult::MoveVertex::LimitingFactor;
+                switch (m_curr_move.kinematics.limiting_factor)
+                {
+                case Limiter::Acceleration: return _u8L("Limited by Acceleration");
+                case Limiter::SCV: return _u8L("Limited by SCV");
+                case Limiter::CruiseRatio: return _u8L("Limited by Cruise Ratio");
+                case Limiter::Lookahead: return _u8L("Limited by Lookahead");
+                case Limiter::Prepare: return _u8L("Limited by Prepare Stage");
+                default: return _u8L("Limited by Request");
+                }
+            }();
+            sprintf(buf, "%s%s", phase.c_str(), phase_label.c_str());
+            ImGui::PushItemWidth(item_size);
+            imgui.text(buf);
+            sprintf(buf, "%s%s", limiter.c_str(), limiter_label.c_str());
+            ImGui::PushItemWidth(item_size);
+            imgui.text(buf);
+        } else {
+            ImGui::NewLine();
+        }
 
         switch (view_type) {
         case EViewType::Height: {
@@ -1367,16 +1372,20 @@ std::pair<unsigned int, unsigned int> GCodeViewer::slider_range_to_segments(unsi
     if (!use_segment_slider())
         return { first, last };
 
-    first = std::min<unsigned int>(first, static_cast<unsigned int>(m_slider_entries.size() - 1));
-    last = std::min<unsigned int>(last, static_cast<unsigned int>(m_slider_entries.size() - 1));
-    if (first > last)
-        std::swap(first, last);
+    if (m_slider_entries.empty())
+        return { first, last };
 
-    const SliderEntry& first_entry = m_slider_entries[first];
-    const SliderEntry& last_entry  = m_slider_entries[last];
+    const unsigned int limit = static_cast<unsigned int>(m_slider_entries.size() - 1);
+    unsigned int adj_first = std::min(first + static_cast<unsigned int>(m_slider_layer_offset), limit);
+    unsigned int adj_last  = std::min(last  + static_cast<unsigned int>(m_slider_layer_offset), limit);
+    if (adj_first > adj_last)
+        std::swap(adj_first, adj_last);
+
+    const SliderEntry& first_entry = m_slider_entries[adj_first];
+    const SliderEntry& last_entry  = m_slider_entries[adj_last];
     return {
-        static_cast<unsigned int>(first_entry.first_segment),
-        static_cast<unsigned int>(last_entry.last_segment)
+        static_cast<unsigned int>(std::clamp<size_t>(first_entry.first_segment, m_sequential_view.endpoints.first, m_sequential_view.endpoints.last)),
+        static_cast<unsigned int>(std::clamp<size_t>(last_entry.last_segment,  m_sequential_view.endpoints.first, m_sequential_view.endpoints.last))
     };
 }
 
@@ -2074,6 +2083,7 @@ void GCodeViewer::update_moves_slider(bool set_to_max)
         }
 
         enable_moves_slider(true);
+        m_slider_layer_offset = 0;
 
         std::vector<double> values(view.endpoints.last - view.endpoints.first + 1);
         std::vector<double> alternate_values(view.endpoints.last - view.endpoints.first + 1);
@@ -2102,12 +2112,24 @@ void GCodeViewer::update_moves_slider(bool set_to_max)
 
     enable_moves_slider(true);
 
-    const size_t slider_count = m_slider_entries.size();
+    const size_t layer_first_segment = m_sequential_view.endpoints.first;
+    const size_t layer_last_segment  = m_sequential_view.endpoints.last;
+    size_t slider_first = segment_to_slider_index(layer_first_segment);
+    size_t slider_last  = segment_to_slider_index(layer_last_segment);
+    slider_first = std::min(slider_first, m_slider_entries.size() - 1);
+    slider_last  = std::min(slider_last,  m_slider_entries.size() - 1);
+    if (slider_first > slider_last)
+        std::swap(slider_first, slider_last);
+
+    m_slider_layer_offset = slider_first;
+
+    const size_t slider_count = slider_last - slider_first + 1;
     std::vector<double> values(slider_count);
     std::vector<double> alternate_values(slider_count);
     for (size_t i = 0; i < slider_count; ++i) {
+        const size_t idx = slider_first + i;
         values[i] = static_cast<double>(i + 1);
-        alternate_values[i] = static_cast<double>(m_slider_entries[i].gcode_id);
+        alternate_values[i] = static_cast<double>(m_slider_entries[idx].gcode_id);
     }
 
     bool keep_min = m_moves_slider->GetActiveValue() == m_moves_slider->GetMinValue();
@@ -2116,8 +2138,8 @@ void GCodeViewer::update_moves_slider(bool set_to_max)
     m_moves_slider->SetSliderAlternateValues(alternate_values);
     m_moves_slider->SetMaxValue(static_cast<int>(slider_count - 1));
 
-    const size_t slider_lower = segment_to_slider_index(m_sequential_view.current.first);
-    const size_t slider_upper = segment_to_slider_index(m_sequential_view.current.last);
+    const size_t slider_lower = segment_to_slider_index(m_sequential_view.current.first) - slider_first;
+    const size_t slider_upper = segment_to_slider_index(m_sequential_view.current.last)  - slider_first;
     m_moves_slider->SetSelectionSpan(static_cast<int>(slider_lower), static_cast<int>(slider_upper));
 
     if (set_to_max)

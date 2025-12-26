@@ -757,6 +757,7 @@ private:
     std::vector<size_t>       m_segment_to_gcode_idx;
     std::vector<SliderEntry>  m_slider_entries;
     std::vector<size_t>       m_segment_to_slider_idx;
+    size_t                    m_slider_layer_offset{ 0 };
     bool                      m_slider_segments_mode{ true };
 
     std::vector<TBuffer> m_buffers{ static_cast<size_t>(EMoveType::Extrude) };
