@@ -747,6 +747,17 @@ private:
 
     std::vector<GCodeProcessorResult::MoveVertex> m_preview_moves;
     bool m_preview_moves_ready{ false };
+    struct SliderEntry {
+        size_t       first_segment{ 0 };
+        size_t       last_segment{ 0 };
+        unsigned int gcode_id{ 0 };
+    };
+    std::vector<unsigned int> m_segment_gcode_ids;
+    std::vector<SliderEntry>  m_gcode_line_ranges;
+    std::vector<size_t>       m_segment_to_gcode_idx;
+    std::vector<SliderEntry>  m_slider_entries;
+    std::vector<size_t>       m_segment_to_slider_idx;
+    bool                      m_slider_segments_mode{ true };
 
     std::vector<TBuffer> m_buffers{ static_cast<size_t>(EMoveType::Extrude) };
     // bounding box of toolpaths
@@ -859,14 +870,7 @@ public:
     bool is_only_gcode_in_preview() const { return m_only_gcode_in_preview; }
 
     EViewType get_view_type() const { return m_view_type; }
-    void set_view_type(EViewType type, bool reset_feature_type_visible = true) {
-        if (type == EViewType::Count)
-            type = EViewType::FeatureType;
-        m_view_type = (EViewType)type;
-        if (reset_feature_type_visible && type == EViewType::ColorPrint) {
-            reset_visible(EViewType::FeatureType);
-        }
-    }
+    void set_view_type(EViewType type, bool reset_feature_type_visible = true);
     void reset_visible(EViewType type) {
         if (type == EViewType::FeatureType) {
             for (size_t i = 0; i < m_roles.size(); ++i) {
@@ -903,6 +907,10 @@ private:
     void rebuild_preview_moves(const GCodeProcessorResult& gcode_result);
     void append_segmented_move(const GCodeProcessorResult::MoveVertex& move, Vec3f start_position);
     const GCodeProcessorResult::MoveVertex& render_move_at(size_t idx) const;
+    void rebuild_slider_data_from_segments();
+    void apply_slider_domain();
+    std::pair<unsigned int, unsigned int> slider_range_to_segments(unsigned int first, unsigned int last) const;
+    size_t segment_to_slider_index(size_t segment) const;
     //BBS: always load shell at preview
     //void load_shells(const Print& print);
     void refresh_render_paths(bool keep_sequential_current_first, bool keep_sequential_current_last) const;
