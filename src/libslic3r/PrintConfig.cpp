@@ -3610,8 +3610,8 @@ void PrintConfigDef::init_fff_params()
     def->label = def->full_label;
     def->category = L("Machine limits");
     def->tooltip = L("Minimum cruise ratio forwarded to Klipper via SET_VELOCITY_LIMIT MINIMUM_CRUISE_RATIO.");
-    def->min = 0.01;
-    def->max = 0.99;
+    def->min = 0;
+    def->max = 1;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloats{ 0.5, 0.5 });
 
