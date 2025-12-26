@@ -389,7 +389,6 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
     const float window_padding = ImGui::GetStyle().WindowPadding.x;
 
     char buf[1024];
-    const bool show_actual_speed_details = view_type == EViewType::ActualSpeed;
      if (true)
     {
         float startx2 = window_padding + item_size + item_spacing;
@@ -407,45 +406,41 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
         sprintf(buf, "%s%.3f", z.c_str(), position.z());
         ImGui::PushItemWidth(item_size);
         imgui.text(buf);
-        if (!show_actual_speed_details)
-            ImGui::NewLine();
 
-        if (show_actual_speed_details) {
-            sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
-            ImGui::PushItemWidth(item_size);
-            imgui.text(buf);
-            sprintf(buf, "%s%.0f", actual_speed.c_str(), m_curr_move.actual_peak_speed());
-            ImGui::PushItemWidth(item_size);
-            imgui.text(buf);
-            auto phase_label = [this]() {
-                using Phase = GCodeProcessorResult::MoveVertex::Kinematics::Phase;
-                switch (m_curr_move.kinematics.phase)
-                {
-                case Phase::Acceleration: return _u8L("Acceleration");
-                case Phase::Cruise: return _u8L("Cruise");
-                case Phase::Deceleration: return _u8L("Deceleration");
-                default: return _u8L("Unknown");
-                }
-            }();
-            auto limiter_label = [this]() {
-                using Limiter = GCodeProcessorResult::MoveVertex::LimitingFactor;
-                switch (m_curr_move.kinematics.limiting_factor)
-                {
-                case Limiter::Acceleration: return _u8L("Limited by Acceleration");
-                case Limiter::SCV: return _u8L("Limited by SCV");
-                case Limiter::CruiseRatio: return _u8L("Limited by Cruise Ratio");
-                case Limiter::Lookahead: return _u8L("Limited by Lookahead");
-                case Limiter::Prepare: return _u8L("Limited by Prepare Stage");
-                default: return _u8L("Limited by Request");
-                }
-            }();
-            sprintf(buf, "%s%s", phase.c_str(), phase_label.c_str());
-            ImGui::PushItemWidth(item_size);
-            imgui.text(buf);
-            sprintf(buf, "%s%s", limiter.c_str(), limiter_label.c_str());
-            ImGui::PushItemWidth(item_size);
-            imgui.text(buf);
-        }
+        sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
+        ImGui::PushItemWidth(item_size);
+        imgui.text(buf);
+        sprintf(buf, "%s%.0f", actual_speed.c_str(), m_curr_move.actual_peak_speed());
+        ImGui::PushItemWidth(item_size);
+        imgui.text(buf);
+        auto phase_label = [this]() {
+            using Phase = GCodeProcessorResult::MoveVertex::Kinematics::Phase;
+            switch (m_curr_move.kinematics.phase)
+            {
+            case Phase::Acceleration: return _u8L("Acceleration");
+            case Phase::Cruise: return _u8L("Cruise");
+            case Phase::Deceleration: return _u8L("Deceleration");
+            default: return _u8L("Unknown");
+            }
+        }();
+        auto limiter_label = [this]() {
+            using Limiter = GCodeProcessorResult::MoveVertex::LimitingFactor;
+            switch (m_curr_move.kinematics.limiting_factor)
+            {
+            case Limiter::Acceleration: return _u8L("Limited by Acceleration");
+            case Limiter::SCV: return _u8L("Limited by SCV");
+            case Limiter::CruiseRatio: return _u8L("Limited by Cruise Ratio");
+            case Limiter::Lookahead: return _u8L("Limited by Lookahead");
+            case Limiter::Prepare: return _u8L("Limited by Prepare Stage");
+            default: return _u8L("Limited by Request");
+            }
+        }();
+        sprintf(buf, "%s%s", phase.c_str(), phase_label.c_str());
+        ImGui::PushItemWidth(item_size);
+        imgui.text(buf);
+        sprintf(buf, "%s%s", limiter.c_str(), limiter_label.c_str());
+        ImGui::PushItemWidth(item_size);
+        imgui.text(buf);
 
         switch (view_type) {
         case EViewType::Height: {
