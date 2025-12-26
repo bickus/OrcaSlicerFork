@@ -625,6 +625,7 @@ public:
             GCodeProcessorResult::MoveVertex m_curr_move;
             bool m_visible{ true };
             bool m_is_dark = false;
+        bool m_show_actual_speed_details{ false };
 
         public:
             float m_scale = 1.0f;
@@ -643,6 +644,7 @@ public:
             void on_change_color_mode(bool is_dark) { m_is_dark = is_dark; }
 
             void update_curr_move(const GCodeProcessorResult::MoveVertex move);
+            void set_show_actual_speed_details(bool show) { m_show_actual_speed_details = show; }
         };
 
         class GCodeWindow
@@ -757,6 +759,7 @@ private:
     std::vector<size_t>       m_segment_to_gcode_idx;
     std::vector<SliderEntry>  m_slider_entries;
     std::vector<size_t>       m_segment_to_slider_idx;
+    size_t                    m_slider_layer_offset{ 0 };
     bool                      m_slider_segments_mode{ true };
 
     std::vector<TBuffer> m_buffers{ static_cast<size_t>(EMoveType::Extrude) };
@@ -912,6 +915,7 @@ private:
     std::pair<unsigned int, unsigned int> slider_range_to_segments(unsigned int first, unsigned int last) const;
     size_t segment_to_slider_index(size_t segment) const;
     bool use_segment_slider() const;
+    void update_tooltip_mode();
     //BBS: always load shell at preview
     //void load_shells(const Print& print);
     void refresh_render_paths(bool keep_sequential_current_first, bool keep_sequential_current_last) const;
