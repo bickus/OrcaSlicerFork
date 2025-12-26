@@ -912,7 +912,6 @@ private:
     void apply_slider_domain();
     std::pair<unsigned int, unsigned int> slider_range_to_segments(unsigned int first, unsigned int last) const;
     size_t segment_to_slider_index(size_t segment) const;
-    size_t segment_to_gcode_index(size_t segment) const;
     bool use_segment_slider() const;
     //BBS: always load shell at preview
     //void load_shells(const Print& print);

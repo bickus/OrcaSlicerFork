@@ -1370,21 +1370,11 @@ void GCodeViewer::apply_slider_domain()
 std::pair<unsigned int, unsigned int> GCodeViewer::slider_range_to_segments(unsigned int first, unsigned int last) const
 {
     if (!use_segment_slider()) {
-        if (m_gcode_line_ranges.empty())
-            return { first, last };
-
-        const unsigned int limit = static_cast<unsigned int>(m_gcode_line_ranges.size() - 1);
-        unsigned int adj_first = std::min(first, limit);
-        unsigned int adj_last  = std::min(last,  limit);
-        if (adj_first > adj_last)
-            std::swap(adj_first, adj_last);
-
-        const SliderEntry& first_entry = m_gcode_line_ranges[adj_first];
-        const SliderEntry& last_entry  = m_gcode_line_ranges[adj_last];
-        return {
-            static_cast<unsigned int>(first_entry.first_segment),
-            static_cast<unsigned int>(last_entry.last_segment)
-        };
+        unsigned int clamped_first = std::clamp(first, m_sequential_view.endpoints.first, m_sequential_view.endpoints.last);
+        unsigned int clamped_last  = std::clamp(last,  m_sequential_view.endpoints.first, m_sequential_view.endpoints.last);
+        if (clamped_first > clamped_last)
+            std::swap(clamped_first, clamped_last);
+        return { clamped_first, clamped_last };
     }
 
     if (m_slider_entries.empty())
@@ -1411,13 +1401,6 @@ size_t GCodeViewer::segment_to_slider_index(size_t segment) const
     if (m_segment_to_slider_idx.empty() || segment >= m_segment_to_slider_idx.size())
         return std::min(segment, m_slider_entries.size() - 1);
     return m_segment_to_slider_idx[segment];
-}
-
-size_t GCodeViewer::segment_to_gcode_index(size_t segment) const
-{
-    if (segment >= m_segment_to_gcode_idx.size())
-        return m_segment_to_gcode_idx.empty() ? 0 : m_segment_to_gcode_idx.back();
-    return m_segment_to_gcode_idx[segment];
 }
 
 bool GCodeViewer::use_segment_slider() const
@@ -2098,7 +2081,8 @@ void GCodeViewer::update_moves_slider(bool set_to_max)
     const bool segment_slider = use_segment_slider();
 
     if (!segment_slider) {
-        if (m_gcode_line_ranges.empty()) {
+        const GCodeViewer::SequentialView &view = get_sequential_view();
+        if (view.endpoints.last < view.endpoints.first) {
             enable_moves_slider(false);
             return;
         }
@@ -2106,25 +2090,21 @@ void GCodeViewer::update_moves_slider(bool set_to_max)
         enable_moves_slider(true);
         m_slider_layer_offset = 0;
 
-        const size_t slider_count = m_gcode_line_ranges.size();
-        std::vector<double> values(slider_count);
-        std::vector<double> alternate_values(slider_count);
-        for (size_t i = 0; i < slider_count; ++i) {
-            values[i] = static_cast<double>(i + 1);
-            alternate_values[i] = static_cast<double>(m_gcode_line_ranges[i].gcode_id);
+        std::vector<double> values(view.endpoints.last - view.endpoints.first + 1);
+        std::vector<double> alternate_values(view.endpoints.last - view.endpoints.first + 1);
+        unsigned int        count = 0;
+        for (unsigned int i = view.endpoints.first; i <= view.endpoints.last; ++i) {
+            values[count] = static_cast<double>(i + 1);
+            if (view.gcode_ids[i] > 0) alternate_values[count] = static_cast<double>(view.gcode_ids[i]);
+            ++count;
         }
 
         bool keep_min = m_moves_slider->GetActiveValue() == m_moves_slider->GetMinValue();
 
         m_moves_slider->SetSliderValues(values);
         m_moves_slider->SetSliderAlternateValues(alternate_values);
-        m_moves_slider->SetMaxValue(static_cast<int>(slider_count - 1));
-
-        const size_t slider_lower = segment_to_gcode_index(m_sequential_view.current.first);
-        const size_t slider_upper = segment_to_gcode_index(m_sequential_view.current.last);
-        m_moves_slider->SetSelectionSpan(static_cast<int>(std::min(slider_lower, slider_count - 1)),
-                                         static_cast<int>(std::min(slider_upper, slider_count - 1)));
-
+        m_moves_slider->SetMaxValue(view.endpoints.last - view.endpoints.first);
+        m_moves_slider->SetSelectionSpan(view.current.first - view.endpoints.first, view.current.last - view.endpoints.first);
         if (set_to_max)
             m_moves_slider->SetHigherValue(keep_min ? m_moves_slider->GetMinValue() : m_moves_slider->GetMaxValue());
         return;
