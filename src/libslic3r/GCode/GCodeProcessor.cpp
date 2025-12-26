@@ -1069,6 +1069,10 @@ void GCodeProcessor::apply_config(const DynamicPrintConfig& config)
         const ConfigOptionFloats* machine_min_travel_rate = config.option<ConfigOptionFloats>("machine_min_travel_rate");
         if (machine_min_travel_rate != nullptr)
             m_time_processor.machine_limits.machine_min_travel_rate.values = machine_min_travel_rate->values;
+
+        const ConfigOptionFloats* klipper_cruise_ratio = config.option<ConfigOptionFloats>("klipper_cruise_ratio");
+        if (klipper_cruise_ratio != nullptr)
+            m_time_processor.machine_limits.klipper_cruise_ratio.values = klipper_cruise_ratio->values;
     }
 
     for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i) {
@@ -1083,6 +1087,10 @@ void GCodeProcessor::apply_config(const DynamicPrintConfig& config)
         m_time_processor.machines[i].max_travel_acceleration = max_travel_acceleration;
         m_time_processor.machines[i].travel_acceleration     = (max_travel_acceleration > 0.0f) ? max_travel_acceleration :
                                                                                                   DEFAULT_TRAVEL_ACCELERATION;
+        float cruise_ratio = get_option_value(m_time_processor.machine_limits.klipper_cruise_ratio, i);
+        if (cruise_ratio <= 0.f)
+            cruise_ratio = 0.5f;
+        m_time_processor.machines[i].minimum_cruise_ratio = cruise_ratio;
     }
 
     if (m_flavor == gcfMarlinLegacy || m_flavor == gcfMarlinFirmware) {
@@ -3871,9 +3879,10 @@ void GCodeProcessor::process_SET_VELOCITY_LIMIT(const GCodeReader::GCodeLine& li
         try {
             ratio = std::stof(matches[1]);
         } catch (...) {}
-        m_time_processor.machine_limits.klipper_cruise_ratio.value = ratio;
-        for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i)
+        for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i) {
+            set_option_value(m_time_processor.machine_limits.klipper_cruise_ratio, i, ratio);
             m_time_processor.machines[i].minimum_cruise_ratio = ratio;
+        }
     }
 }
 
