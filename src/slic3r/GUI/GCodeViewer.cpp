@@ -1242,6 +1242,15 @@ void GCodeViewer::append_segmented_move(const GCodeProcessorResult::MoveVertex& 
                 chunk.kinematics.accelerate_distance = in_accel ? chunk_length : 0.0f;
                 chunk.kinematics.cruise_distance = in_cruise ? chunk_length : 0.0f;
                 chunk.kinematics.decelerate_distance = in_decel ? chunk_length : 0.0f;
+                using Phase = GCodeProcessorResult::MoveVertex::Kinematics::Phase;
+                if (in_accel)
+                    chunk.kinematics.phase = Phase::Acceleration;
+                else if (in_decel)
+                    chunk.kinematics.phase = Phase::Deceleration;
+                else if (in_cruise)
+                    chunk.kinematics.phase = Phase::Cruise;
+                else
+                    chunk.kinematics.phase = Phase::Unknown;
             }
 
             m_preview_moves.push_back(std::move(chunk));
