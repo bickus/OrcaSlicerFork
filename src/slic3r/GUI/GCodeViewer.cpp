@@ -1224,7 +1224,9 @@ void GCodeViewer::append_segmented_move(const GCodeProcessorResult::MoveVertex& 
             const float ratio = std::clamp(chunk_length / total_length, 0.0f, 1.0f);
             chunk.delta_extruder = move.delta_extruder * ratio;
             chunk.time = move.time * ratio;
-            chunk.layer_duration = move.layer_duration * ratio;
+            // Keep full layer time so non-Actual Speed previews (Layer Time / Layer Time log)
+            // remain per-layer even when the geometry is segmented for Actual Speed.
+            chunk.layer_duration = move.layer_duration;
             chunk.travel_dist = chunk_length;
 
             const float normalized_end = chunk_end / total_length;
