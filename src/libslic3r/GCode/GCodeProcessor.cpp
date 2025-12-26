@@ -240,6 +240,7 @@ void GCodeProcessor::TimeMachine::reset()
     max_retract_acceleration = 0.0f;
     travel_acceleration = 0.0f;
     max_travel_acceleration = 0.0f;
+    minimum_cruise_ratio = 0.5f;
     extrude_factor_override_percentage = 1.0f;
     time = 0.0f;
     stop_times = std::vector<StopTime>();
@@ -781,6 +782,8 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
         m_time_processor.machines[i].max_travel_acceleration = max_travel_acceleration;
         m_time_processor.machines[i].travel_acceleration     = (max_travel_acceleration > 0.0f) ? max_travel_acceleration :
                                                                                                   DEFAULT_TRAVEL_ACCELERATION;
+        m_time_processor.machines[i].minimum_cruise_ratio =
+            static_cast<float>(m_time_processor.machine_limits.klipper_cruise_ratio.value);
     }
 
     m_disable_m73 = config.disable_m73;
@@ -3862,6 +3865,16 @@ void GCodeProcessor::process_SET_VELOCITY_LIMIT(const GCodeReader::GCodeLine& li
         }
     }
 
+    pattern = std::regex("\\sMINIMUM_CRUISE_RATIO\\s*=\\s*([0-9]*\\.*[0-9]*)");
+    if (std::regex_search(line.raw(), matches, pattern) && matches.size() == 2) {
+        float ratio = 0.0f;
+        try {
+            ratio = std::stof(matches[1]);
+        } catch (...) {}
+        m_time_processor.machine_limits.klipper_cruise_ratio.value = ratio;
+        for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i)
+            m_time_processor.machines[i].minimum_cruise_ratio = ratio;
+    }
 }
 
 void GCodeProcessor::process_M221(const GCodeReader::GCodeLine& line)

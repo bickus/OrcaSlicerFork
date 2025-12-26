@@ -1,33 +1,23 @@
 # Subtask 1 – Printer Setting & Persistence
 
-## Goal
-Introduce a printer-level `klipper_cruise_ratio` setting (default 0.50) that is persisted in presets/3MFs, exposed under **Printer Settings → Motion ability → Advanced**, and synchronized with Klipper via `SET_VELOCITY_LIMIT MINIMUM_CRUISE_RATIO`.
+## Overview
+Klipper now receives a persistent `klipper_cruise_ratio` (default `0.5`) so the slicer and backend agree on the minimum cruise ratio used when converting moves into `SET_VELOCITY_LIMIT`. The value is part of printer presets/3MFs, surfaced in the Motion ability page, emitted to G-code once per print, and fed into the preview time estimator so follow‑up subtasks can use it.
 
-## Work Items
-1. **Config Definition**
-   - Extend `MachineEnvelopeConfig` / `PrintConfig` (`src/libslic3r/PrintConfig.{hpp,cpp}`) with a `ConfigOptionFloat klipper_cruise_ratio`.
-   - Label/tooltip per spec (“Klipper cruise ratio”, allowed 0.01–0.99). Mark as `comAdvanced`, default `0.5`.
-   - Ensure `FullPrintConfig::defaults()` picks up the new option so CLI/3MF serialization continue to work without extra code.
+## Config & UI
+- `MachineEnvelopeConfig` / `PrintConfig` define `klipper_cruise_ratio` as a `ConfigOptionFloat` (`src/libslic3r/PrintConfig.{hpp,cpp}`) with bounds `0.01–0.99`, advanced mode, and categorized under “Machine limits”.
+- `Preset.cpp` includes the key in `s_Preset_machine_limits_options`, so printer presets, bundles, and physical printers serialize it without additional plumbing.
+- `TabPrinter::build_kinematics_page()` now adds the option right below `emit_machine_limits_to_gcode`. `append_option_line` keeps the Normal/Silent dual column layout; both columns currently edit the same scalar value per the spec requirement.
+- `toggle_options()` hides the row when the printer flavor isn’t Klipper, so other firmware pages stay unchanged.
 
-2. **UI Wiring**
-   - In `TabPrinter::build_kinematics_page()` (`src/slic3r/GUI/Tab.cpp`), add the new option to the Motion ability page (same “Advanced” optgroup that already holds `emit_machine_limits_to_gcode`).
-   - Respect dual-column layout (Normal/Silent) when silent mode is enabled; the option should read/write both columns just like other scalar machine limits.
+## Firmware Sync
+- `GCodeWriter` stores the configured ratio, emits `MINIMUM_CRUISE_RATIO=<value>` alongside the first applicable `SET_VELOCITY_LIMIT`, and caches the last value so the command only appears when the ratio changes (effectively once per print today).
+- The helper is integrated into `set_print_acceleration`, `set_jerk_xy`, and `set_accel_and_jerk`, so any path that produces Klipper velocity-limit commands automatically appends the ratio token when needed.
 
-3. **G-code Emission**
-   - Update `GCodeWriter` (`src/libslic3r/GCodeWriter.cpp`) so that when `gcode_flavor == gcfKlipper` it emits `SET_VELOCITY_LIMIT MINIMUM_CRUISE_RATIO=<value>` alongside existing `ACCEL`/`SQUARE_CORNER_VELOCITY` fields.
-   - Make sure the command is sent once per print (e.g., together with other velocity limit setup) and respects per-mode overrides if those are ever added.
+## Parsing & TimeMachine
+- `GCodeProcessor::process_SET_VELOCITY_LIMIT()` recognizes `MINIMUM_CRUISE_RATIO=` and updates both `m_time_processor.machine_limits.klipper_cruise_ratio` and every `TimeMachine::minimum_cruise_ratio`.
+- `apply_config()` seeds each `TimeMachine` with the printer-profile value before parsing begins, giving the estimator a deterministic fallback whenever the incoming G-code omits the token.
+- `TimeMachine::reset()` initializes the ratio to `0.5f`, so new instances have a sane default even before configuration is applied.
 
-4. **Runtime Parsing**
-   - Extend `GCodeProcessor::process_SET_VELOCITY_LIMIT()` to capture `MINIMUM_CRUISE_RATIO=` tokens and update a new field on `m_time_processor.machine_limits`.
-   - When Klipper G-code lacks the token, fall back to the printer profile value so preview math always has a ratio.
-
-5. **Data Plumbing**
-   - Feed the stored ratio into `TimeMachine` (prepare to read it from `MachineEnvelopeConfig`, probably via a helper similar to `get_option_value`).
-   - Ensure the ratio is serialized/deserialized in 3MF/project configs (verify no hard-coded allowlists need to be updated; if they do, touch `PresetBundle::printer_options()` and related doc comments).
-
-6. **Docs**
-   - Add document to `doc/klipper_actual_speed/...` describing the technical side of whay you've done to be used by another developers for next tasks of this feature. If any further updates within this task - update this document to be actual and relevant.
-
-## Dependencies / Open Questions
-- Confirm whether `MachineEnvelopeConfig` currently round-trips every option automatically; if not, extend serialization helpers.
-- The UI should hide the field for non-Klipper flavors.
+## Assumptions & Notes
+- The spec called for `ConfigOptionFloat` while also requesting a dual-column UI. We implemented the dual-column layout with a shared scalar value (both columns edit the same backing float). If future work introduces per-mode overrides, the option can be upgraded to `ConfigOptionFloats` without breaking the UI wiring added here.
+- Current work only records and forwards the ratio; no planner math consumes it yet. Downstream subtasks can read the value from `TimeMachine::minimum_cruise_ratio` without additional plumbing.

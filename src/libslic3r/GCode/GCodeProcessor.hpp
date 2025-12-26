@@ -444,6 +444,7 @@ class Print;
             float travel_acceleration; // mm/s^2
             // hard limit for the travel acceleration, to which the firmware will clamp.
             float max_travel_acceleration; // mm/s^2
+            float minimum_cruise_ratio;
             float extrude_factor_override_percentage;
             float time; // s
             struct StopTime
