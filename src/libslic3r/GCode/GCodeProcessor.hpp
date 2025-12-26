@@ -197,6 +197,14 @@ class Print;
                 float decelerate_distance{ 0.0f }; // mm
                 LimitingFactor limiting_factor{ LimitingFactor::Requested };
                 bool has_kinematics{ false };
+                enum class Phase : unsigned char
+                {
+                    Unknown,
+                    Acceleration,
+                    Cruise,
+                    Deceleration
+                };
+                Phase phase{ Phase::Unknown };
             };
 
             Kinematics kinematics;

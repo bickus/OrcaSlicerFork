@@ -375,8 +375,10 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
     std::string z = ImGui::ColorMarkerStart + std::string("Z: ") + ImGui::ColorMarkerEnd;
     std::string height = ImGui::ColorMarkerStart + _u8L("Height: ") + ImGui::ColorMarkerEnd;
     std::string width = ImGui::ColorMarkerStart + _u8L("Width: ") + ImGui::ColorMarkerEnd;
-    std::string speed = ImGui::ColorMarkerStart + _u8L("Speed: ") + ImGui::ColorMarkerEnd;
+    std::string speed = ImGui::ColorMarkerStart + _u8L("Requested Speed: ") + ImGui::ColorMarkerEnd;
     std::string actual_speed = ImGui::ColorMarkerStart + _u8L("Actual: ") + ImGui::ColorMarkerEnd;
+    std::string phase = ImGui::ColorMarkerStart + _u8L("Phase: ") + ImGui::ColorMarkerEnd;
+    std::string limiter = ImGui::ColorMarkerStart + _u8L("Limited by: ") + ImGui::ColorMarkerEnd;
     std::string flow = ImGui::ColorMarkerStart + _u8L("Flow: ") + ImGui::ColorMarkerEnd;
     std::string layer_time = ImGui::ColorMarkerStart + _u8L("Layer Time: ") + ImGui::ColorMarkerEnd;
     std::string fanspeed = ImGui::ColorMarkerStart + _u8L("Fan: ") + ImGui::ColorMarkerEnd;
@@ -408,6 +410,34 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
         ImGui::PushItemWidth(item_size);
         imgui.text(buf);
         sprintf(buf, "%s%.0f", actual_speed.c_str(), m_curr_move.actual_peak_speed());
+        ImGui::PushItemWidth(item_size);
+        imgui.text(buf);
+        auto phase_label = [this]() {
+            using Phase = GCodeProcessorResult::MoveVertex::Kinematics::Phase;
+            switch (m_curr_move.kinematics.phase)
+            {
+            case Phase::Acceleration: return _u8L("Acceleration");
+            case Phase::Cruise: return _u8L("Cruise");
+            case Phase::Deceleration: return _u8L("Deceleration");
+            default: return _u8L("Unknown");
+            }
+        }();
+        auto limiter_label = [this]() {
+            using Limiter = GCodeProcessorResult::MoveVertex::LimitingFactor;
+            switch (m_curr_move.kinematics.limiting_factor)
+            {
+            case Limiter::Acceleration: return _u8L("Limited by Acceleration");
+            case Limiter::SCV: return _u8L("Limited by SCV");
+            case Limiter::CruiseRatio: return _u8L("Limited by Cruise Ratio");
+            case Limiter::Lookahead: return _u8L("Limited by Lookahead");
+            case Limiter::Prepare: return _u8L("Limited by Prepare Stage");
+            default: return _u8L("Limited by Request");
+            }
+        }();
+        sprintf(buf, "%s%s", phase.c_str(), phase_label.c_str());
+        ImGui::PushItemWidth(item_size);
+        imgui.text(buf);
+        sprintf(buf, "%s%s", limiter.c_str(), limiter_label.c_str());
         ImGui::PushItemWidth(item_size);
         imgui.text(buf);
 

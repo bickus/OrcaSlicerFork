@@ -5043,6 +5043,23 @@ void GCodeProcessor::record_block_kinematics(const TimeBlock& block, PrintEstima
     const float exit_speed = block.feedrate_profile.exit;
     const float peak_speed = block.trapezoid.cruise_feedrate;
     const float requested_speed = (block.requested_feedrate > 0.0f) ? block.requested_feedrate : peak_speed;
+        const float total_distance = std::max(0.0f, block.distance);
+        auto resolve_phase = [&](float accel_d, float cruise_d, float decel_d) {
+            using Phase = GCodeProcessorResult::MoveVertex::Kinematics::Phase;
+            const float accel = std::max(0.0f, accel_d);
+            const float cruise = std::max(0.0f, cruise_d);
+            const float decel = std::max(0.0f, decel_d);
+            if (total_distance <= 0.0f)
+                return Phase::Unknown;
+            if (accel >= cruise && accel >= decel && accel > 0.0f)
+                return Phase::Acceleration;
+            if (decel >= accel && decel >= cruise && decel > 0.0f)
+                return Phase::Deceleration;
+            if (cruise > 0.0f)
+                return Phase::Cruise;
+            return Phase::Unknown;
+        };
+        const auto phase = resolve_phase(accelerate_distance, cruise_distance, decelerate_distance);
 
     for (size_t idx = range.first; idx <= range.second && idx < m_result.moves.size(); ++idx) {
         auto& move = m_result.moves[idx];
@@ -5056,6 +5073,7 @@ void GCodeProcessor::record_block_kinematics(const TimeBlock& block, PrintEstima
         kin.decelerate_distance = decelerate_distance;
         kin.limiting_factor = limiting_factor;
         kin.has_kinematics = true;
+            kin.phase = phase;
     }
 
     m_g1_to_move_range.erase(it);
