@@ -406,6 +406,8 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
         sprintf(buf, "%s%.3f", z.c_str(), position.z());
         ImGui::PushItemWidth(item_size);
         imgui.text(buf);
+        if (!show_actual_speed_details)
+            ImGui::NewLine();
 
         if (show_actual_speed_details) {
             sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
