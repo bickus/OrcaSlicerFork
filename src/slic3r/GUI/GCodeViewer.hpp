@@ -901,7 +901,7 @@ private:
     void load_toolpaths(const GCodeProcessorResult& gcode_result, const std::vector<GCodeProcessorResult::MoveVertex>& preview_moves,
         const BuildVolume& build_volume, const std::vector<BoundingBoxf3>& exclude_bounding_box);
     void rebuild_preview_moves(const GCodeProcessorResult& gcode_result);
-    void append_segmented_move(const GCodeProcessorResult::MoveVertex& move, const Vec3f& start_position);
+    void append_segmented_move(const GCodeProcessorResult::MoveVertex& move, Vec3f start_position);
     //BBS: always load shell at preview
     //void load_shells(const Print& print);
     void refresh_render_paths(bool keep_sequential_current_first, bool keep_sequential_current_last) const;

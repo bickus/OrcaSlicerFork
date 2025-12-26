@@ -1131,7 +1131,7 @@ void GCodeViewer::rebuild_preview_moves(const GCodeProcessorResult& gcode_result
     m_preview_moves_ready = true;
 }
 
-void GCodeViewer::append_segmented_move(const GCodeProcessorResult::MoveVertex& move, const Vec3f& start_position)
+void GCodeViewer::append_segmented_move(const GCodeProcessorResult::MoveVertex& move, Vec3f start_position)
 {
     const float total_length = std::max(move.travel_dist, 0.0f);
     if (total_length <= kActualSpeedPreviewMaxChunk || !std::isfinite(total_length)) {
