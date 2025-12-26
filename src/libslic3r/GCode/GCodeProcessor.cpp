@@ -148,6 +148,14 @@ static float max_allowable_speed(float acceleration, float target_velocity, floa
     return std::sqrt(value);
 }
 
+static float cruise_ratio_delta_distance(const GCodeProcessor::TimeBlock& block)
+{
+    if (!block.has_cruise_ratio())
+        return block.distance;
+    const float ratio = std::clamp(block.cruise_ratio, 0.0f, 1.0f);
+    return std::max(0.0f, (1.0f - ratio) * block.distance);
+}
+
 static float acceleration_time_from_distance(float initial_feedrate, float distance, float acceleration)
 {
     return (acceleration != 0.0f) ? (speed_from_distance(initial_feedrate, distance, acceleration) - initial_feedrate) / acceleration : 0.0f;
@@ -298,7 +306,9 @@ static bool planner_forward_pass_kernel(GCodeProcessor::TimeBlock& prev, GCodePr
     // If nominal length is true, max junction speed is guaranteed to be reached. No need to recheck.
     if (!prev.flags.nominal_length) {
         if (prev.feedrate_profile.entry < curr.feedrate_profile.entry) {
-            float entry_speed = std::min(curr.feedrate_profile.entry, max_allowable_speed(-prev.acceleration, prev.feedrate_profile.entry, prev.distance));
+            float entry_speed = std::min(
+                curr.feedrate_profile.entry,
+                max_allowable_speed(-prev.acceleration, prev.feedrate_profile.entry, cruise_ratio_delta_distance(prev)));
 
             // Check for junction speed change
             if (curr.feedrate_profile.entry != entry_speed) {
@@ -322,7 +332,9 @@ static bool planner_reverse_pass_kernel(GCodeProcessor::TimeBlock& curr, GCodePr
         // If nominal length true, max junction speed is guaranteed to be reached. Only compute
         // for max allowable speed if block is decelerating and nominal length is false.
         if (!curr.flags.nominal_length && curr.max_entry_speed > next.feedrate_profile.entry)
-            curr.feedrate_profile.entry = std::min(curr.max_entry_speed, max_allowable_speed(-curr.acceleration, next.feedrate_profile.entry, curr.distance));
+            curr.feedrate_profile.entry = std::min(
+                curr.max_entry_speed,
+                max_allowable_speed(-curr.acceleration, next.feedrate_profile.entry, cruise_ratio_delta_distance(curr)));
         else
             curr.feedrate_profile.entry = curr.max_entry_speed;
 
@@ -3039,7 +3051,7 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
                 vmax_junction = curr.safe_feedrate;
         }
 
-        float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, block.distance);
+        float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, cruise_ratio_delta_distance(block));
         block.feedrate_profile.entry = std::min(vmax_junction, v_allowable);
 
         block.max_entry_speed = vmax_junction;
@@ -3506,7 +3518,7 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
                 vmax_junction = curr.safe_feedrate;
         }
 
-        float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, block.distance);
+        float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, cruise_ratio_delta_distance(block));
         block.feedrate_profile.entry = std::min(vmax_junction, v_allowable);
 
         block.max_entry_speed = vmax_junction;
