@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <optional>
+#include <unordered_map>
 
 namespace Slic3r {
 
@@ -173,6 +174,31 @@ class Print;
             EMovePathType move_path_type{ EMovePathType::Noop_move };
             Vec3f arc_center_position{ Vec3f::Zero() };      // mm
             std::vector<Vec3f> interpolation_points;     // interpolation points of arc for drawing
+
+            enum class LimitingFactor : unsigned char
+            {
+                Requested,
+                Acceleration,
+                SCV,
+                CruiseRatio,
+                Lookahead,
+                Prepare
+            };
+
+            struct Kinematics
+            {
+                float requested_speed{ 0.0f };     // mm/s
+                float entry_speed{ 0.0f };         // mm/s
+                float exit_speed{ 0.0f };          // mm/s
+                float peak_speed{ 0.0f };          // mm/s
+                float accelerate_distance{ 0.0f }; // mm
+                float cruise_distance{ 0.0f };     // mm
+                float decelerate_distance{ 0.0f }; // mm
+                LimitingFactor limiting_factor{ LimitingFactor::Requested };
+                bool has_kinematics{ false };
+            };
+
+            Kinematics kinematics;
 
             float volumetric_rate() const { return feedrate * mm3_per_mm; }
             //BBS: new function to support arc move
@@ -387,12 +413,19 @@ class Print;
             float acceleration{ 0.0f }; // mm/s^2
             float max_entry_speed{ 0.0f }; // mm/s
             float safe_feedrate{ 0.0f }; // mm/s
+            float cruise_ratio{ 0.0f };
+            float requested_feedrate{ 0.0f }; // mm/s
+            bool scv_limited{ false };
+            bool lookahead_limited{ false };
+            bool cruise_ratio_applied{ false };
+            bool has_xy_motion{ false };
             Flags flags;
             FeedrateProfile feedrate_profile;
             Trapezoid trapezoid;
 
             // Calculates this block's trapezoid
             void calculate_trapezoid();
+            bool has_cruise_ratio() const { return cruise_ratio > 0.0f; }
 
             float time() const;
         };
@@ -447,6 +480,11 @@ class Print;
             float minimum_cruise_ratio;
             float extrude_factor_override_percentage;
             float time; // s
+            float square_corner_velocity{ 5.0f }; // mm/s
+            GCodeProcessor* owner{ nullptr };
+            bool klipper_mode{ false };
+            bool collect_kinematics{ false };
+            PrintEstimatedStatistics::ETimeMode time_mode{ PrintEstimatedStatistics::ETimeMode::Normal };
             struct StopTime
             {
                 unsigned int g1_line_id;
@@ -727,6 +765,7 @@ class Print;
         CpColor m_cp_color;
         SeamsDetector m_seams_detector;
         OptionsZCorrector m_options_z_corrector;
+        std::unordered_map<unsigned int, std::pair<size_t, size_t>> m_g1_to_move_range;
         size_t m_last_default_color_id;
         bool m_detect_layer_based_on_tag {false};
         int m_seams_count;
@@ -952,6 +991,9 @@ class Print;
 
         //BBS: different path_type is only used for arc move
         void store_move_vertex(EMoveType type, EMovePathType path_type = EMovePathType::Noop_move);
+        void register_g1_move(unsigned int g1_line_id);
+        void record_block_kinematics(const TimeBlock& block, PrintEstimatedStatistics::ETimeMode mode);
+        void update_time_machine_modes();
 
         void set_extrusion_role(ExtrusionRole role);
 
@@ -972,6 +1014,7 @@ class Print;
         int   get_filament_vitrification_temperature(size_t extrude_id);
         void process_custom_gcode_time(CustomGCode::Type code);
         void process_filaments(CustomGCode::Type code);
+        float current_scv(PrintEstimatedStatistics::ETimeMode mode) const;
 
         // Simulates firmware st_synchronize() call
         void simulate_st_synchronize(float additional_time = 0.0f);
