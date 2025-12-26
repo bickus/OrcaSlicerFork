@@ -2792,7 +2792,16 @@ inline t_config_option_keys deep_diff(const ConfigBase &config_this, const Confi
     for (const t_config_option_key &opt_key : config_this.keys()) {
         const ConfigOption *this_opt  = config_this.option(opt_key);
         const ConfigOption *other_opt = config_other.option(opt_key);
-        if (this_opt != nullptr && other_opt != nullptr && *this_opt != *other_opt)
+        if (this_opt == nullptr)
+            continue;
+        if (other_opt == nullptr) {
+            // Parent config may miss newly introduced options entirely, but the UI still
+            // expects their change indicators to light up. Treat those as modified so
+            // tabs can decorate the corresponding controls.
+            diff.emplace_back(opt_key);
+            continue;
+        }
+        if (*this_opt != *other_opt)
         {
             //BBS: add bed_exclude_area
             if (opt_key == "printable_area" || opt_key == "bed_exclude_area" || opt_key == "compatible_prints" || opt_key == "compatible_printers" || opt_key == "thumbnails") {
