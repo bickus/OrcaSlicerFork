@@ -42,10 +42,7 @@ void GCodeWriter::apply_print_config(const PrintConfig &print_config)
     };
     m_max_jerk_z = print_config.machine_max_jerk_z.values.front();
     m_max_jerk_e = print_config.machine_max_jerk_e.values.front();
-    double cruise_ratio = 0.5;
-    if (!print_config.klipper_cruise_ratio.values.empty())
-        cruise_ratio = print_config.klipper_cruise_ratio.values.front();
-    m_klipper_cruise_ratio = std::clamp(cruise_ratio, 0.01, 0.99);
+    m_klipper_cruise_ratio = std::clamp(print_config.klipper_cruise_ratio.value, 0.01, 0.99);
     m_last_klipper_cruise_ratio = -1.0;
 }
 

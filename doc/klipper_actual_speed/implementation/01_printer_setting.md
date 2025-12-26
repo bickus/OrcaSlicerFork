@@ -4,7 +4,7 @@
 Klipper now receives a persistent `klipper_cruise_ratio` (default `0.5`) so the slicer and backend agree on the minimum cruise ratio used when converting moves into `SET_VELOCITY_LIMIT`. The value is part of printer presets/3MFs, surfaced in the Motion ability page, emitted to G-code once per print, and fed into the preview time estimator so follow‑up subtasks can use it.
 
 ## Config & UI
-- `MachineEnvelopeConfig` / `PrintConfig` define `klipper_cruise_ratio` as a `ConfigOptionFloats` (`src/libslic3r/PrintConfig.{hpp,cpp}`) with bounds `0.01–0.99`, advanced mode, and categorized under “Machine limits”. The dual-column vector mirrors how other machine-limit fields store Normal/Silent values, but both entries default to the same scalar.
+- `MachineEnvelopeConfig` / `PrintConfig` define `klipper_cruise_ratio` as a `ConfigOptionFloat` (`src/libslic3r/PrintConfig.{hpp,cpp}`) with bounds `0.01–0.99`, advanced mode, and categorized under “Machine limits”.
 - `Preset.cpp` includes the key in `s_Preset_machine_limits_options`, so printer presets, bundles, and physical printers serialize it without additional plumbing.
 - `TabPrinter::build_kinematics_page()` now adds the option right below `emit_machine_limits_to_gcode`. `append_option_line` keeps the Normal/Silent dual column layout; both columns currently edit the same scalar value per the spec requirement.
 - `toggle_options()` hides the row when the printer flavor isn’t Klipper, so other firmware pages stay unchanged.
@@ -19,5 +19,5 @@ Klipper now receives a persistent `klipper_cruise_ratio` (default `0.5`) so the 
 - `TimeMachine::reset()` initializes the ratio to `0.5f`, so new instances have a sane default even before configuration is applied.
 
 ## Assumptions & Notes
-- CLI/startup validate the vector size and range for every column (Normal/Silent). Keeping the option as `ConfigOptionFloats` avoids the `[0,0]` range errors we saw when attempting to treat it as a scalar.
+- The spec called for `ConfigOptionFloat` while also requesting a dual-column UI. We implemented the dual-column layout with a shared scalar value (both columns edit the same backing float). If future work introduces per-mode overrides, the option can be upgraded to `ConfigOptionFloats` without breaking the UI wiring added here.
 - Current work only records and forwards the ratio; no planner math consumes it yet. Downstream subtasks can read the value from `TimeMachine::minimum_cruise_ratio` without additional plumbing.
