@@ -1370,10 +1370,24 @@ void GCodeViewer::apply_slider_domain()
 std::pair<unsigned int, unsigned int> GCodeViewer::slider_range_to_segments(unsigned int first, unsigned int last) const
 {
     if (!use_segment_slider()) {
-        unsigned int clamped_first = std::clamp(first, m_sequential_view.endpoints.first, m_sequential_view.endpoints.last);
-        unsigned int clamped_last  = std::clamp(last,  m_sequential_view.endpoints.first, m_sequential_view.endpoints.last);
+        const size_t layer_start = m_sequential_view.endpoints.first;
+        const size_t layer_end   = m_sequential_view.endpoints.last;
+
+        unsigned int clamped_first = first;
+        if (clamped_first < layer_start)
+            clamped_first = static_cast<unsigned int>(layer_start);
+        if (clamped_first > layer_end)
+            clamped_first = static_cast<unsigned int>(layer_end);
+
+        unsigned int clamped_last = last;
+        if (clamped_last < layer_start)
+            clamped_last = static_cast<unsigned int>(layer_start);
+        if (clamped_last > layer_end)
+            clamped_last = static_cast<unsigned int>(layer_end);
+
         if (clamped_first > clamped_last)
             std::swap(clamped_first, clamped_last);
+
         return { clamped_first, clamped_last };
     }
 
