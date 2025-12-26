@@ -3605,7 +3605,7 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(true));
 
-    def = this->add("klipper_cruise_ratio", coFloats);
+    def = this->add("klipper_cruise_ratio", coFloat);
     def->full_label = L("Klipper cruise ratio");
     def->label = def->full_label;
     def->category = L("Machine limits");
@@ -3613,7 +3613,7 @@ void PrintConfigDef::init_fff_params()
     def->min = 0;
     def->max = 1;
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloats{ 0.5, 0.5 });
+    def->set_default_value(new ConfigOptionFloat(0.5));
 
     def = this->add("machine_pause_gcode", coString);
     def->label = L("Pause G-code");

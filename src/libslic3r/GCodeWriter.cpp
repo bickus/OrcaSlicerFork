@@ -42,10 +42,7 @@ void GCodeWriter::apply_print_config(const PrintConfig &print_config)
     };
     m_max_jerk_z = print_config.machine_max_jerk_z.values.front();
     m_max_jerk_e = print_config.machine_max_jerk_e.values.front();
-    double cruise_ratio = 0.5;
-    if (!print_config.klipper_cruise_ratio.values.empty())
-        cruise_ratio = print_config.klipper_cruise_ratio.values.front();
-    m_klipper_cruise_ratio = std::clamp(cruise_ratio, 0.01, 0.99);
+    m_klipper_cruise_ratio = std::clamp(print_config.klipper_cruise_ratio.value, 0.01, 0.99);
     m_last_klipper_cruise_ratio = -1.0;
 }
 
@@ -216,8 +213,8 @@ std::string GCodeWriter::set_acceleration_internal(Acceleration type, unsigned i
     if (FLAVOR_IS(gcfKlipper)) {
         std::string ratio_token = klipper_cruise_ratio_token();
         if (!changed_accel && ratio_token.empty())
-            return std::string();
-
+        return std::string();
+    
         std::ostringstream gcode;
         gcode << "SET_VELOCITY_LIMIT";
         bool emitted_accel = false;
@@ -241,7 +238,7 @@ std::string GCodeWriter::set_acceleration_internal(Acceleration type, unsigned i
         return std::string();
 
     last_value = acceleration;
-
+    
     std::ostringstream gcode;
     if (FLAVOR_IS(gcfRepetier))
         gcode << (separate_travel ? "M202 X" : "M201 X") << acceleration << " Y" << acceleration;
@@ -264,14 +261,14 @@ std::string GCodeWriter::set_jerk_xy(double jerk)
     if (FLAVOR_IS(gcfKlipper)) {
         std::string ratio_token = klipper_cruise_ratio_token();
         if (!changed_jerk && ratio_token.empty())
-            return std::string();
+        return std::string();
 
-        std::ostringstream gcode;
+    std::ostringstream gcode;
         gcode << "SET_VELOCITY_LIMIT";
         bool emitted_jerk = false;
         if (changed_jerk) {
             double jerk_x = jerk;
-            // Clamp the jerk to the allowed maximum.
+        // Clamp the jerk to the allowed maximum.
             if (m_max_jerk_x > 0 && jerk_x > m_max_jerk_x)
                 jerk_x = m_max_jerk_x;
             if (m_max_jerk_y > 0 && jerk_x > m_max_jerk_y)
@@ -296,15 +293,15 @@ std::string GCodeWriter::set_jerk_xy(double jerk)
     m_last_jerk = jerk;
 
     std::ostringstream gcode;
-    double jerk_x = jerk;
-    double jerk_y = jerk;
-    // Clamp the axis jerk to the allowed maximum.
-    if (m_max_jerk_x > 0 && jerk > m_max_jerk_x)
-        jerk_x = m_max_jerk_x;
-    if (m_max_jerk_y > 0 && jerk > m_max_jerk_y)
-        jerk_y = m_max_jerk_y;
-    
-    gcode << "M205 X" << jerk_x << " Y" << jerk_y;
+        double jerk_x = jerk;
+        double jerk_y = jerk;
+        // Clamp the axis jerk to the allowed maximum.
+        if (m_max_jerk_x > 0 && jerk > m_max_jerk_x)
+            jerk_x = m_max_jerk_x;
+        if (m_max_jerk_y > 0 && jerk > m_max_jerk_y)
+            jerk_y = m_max_jerk_y;
+        
+        gcode << "M205 X" << jerk_x << " Y" << jerk_y;
       
     if (m_is_bbl_printers)
         gcode << std::setprecision(2) << " Z" << m_max_jerk_z << " E" << m_max_jerk_e;
