@@ -2789,6 +2789,9 @@ void add_correct_opts_to_diff(const std::string &opt_key, t_config_option_keys& 
 inline t_config_option_keys deep_diff(const ConfigBase &config_this, const ConfigBase &config_other)
 {
     t_config_option_keys diff;
+    auto mark_missing = [&diff](const t_config_option_key &opt_key) {
+        diff.emplace_back(opt_key);
+    };
     for (const t_config_option_key &opt_key : config_this.keys()) {
         const ConfigOption *this_opt  = config_this.option(opt_key);
         const ConfigOption *other_opt = config_other.option(opt_key);
@@ -2798,7 +2801,7 @@ inline t_config_option_keys deep_diff(const ConfigBase &config_this, const Confi
             // Parent config may miss newly introduced options entirely, but the UI still
             // expects their change indicators to light up. Treat those as modified so
             // tabs can decorate the corresponding controls.
-            diff.emplace_back(opt_key);
+            mark_missing(opt_key);
             continue;
         }
         if (*this_opt != *other_opt)
@@ -2835,6 +2838,11 @@ inline t_config_option_keys deep_diff(const ConfigBase &config_this, const Confi
                 }
             }
         }
+    }
+    for (const t_config_option_key &opt_key : config_other.keys()) {
+        if (config_this.option(opt_key) != nullptr)
+            continue;
+        mark_missing(opt_key);
     }
     return diff;
 }
