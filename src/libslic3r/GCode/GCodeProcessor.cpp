@@ -782,8 +782,10 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
         m_time_processor.machines[i].max_travel_acceleration = max_travel_acceleration;
         m_time_processor.machines[i].travel_acceleration     = (max_travel_acceleration > 0.0f) ? max_travel_acceleration :
                                                                                                   DEFAULT_TRAVEL_ACCELERATION;
-        m_time_processor.machines[i].minimum_cruise_ratio =
-            static_cast<float>(m_time_processor.machine_limits.klipper_cruise_ratio.value);
+        float cruise_ratio = get_option_value(m_time_processor.machine_limits.klipper_cruise_ratio, i);
+        if (cruise_ratio <= 0.f)
+            cruise_ratio = 0.5f;
+        m_time_processor.machines[i].minimum_cruise_ratio = cruise_ratio;
     }
 
     m_disable_m73 = config.disable_m73;
