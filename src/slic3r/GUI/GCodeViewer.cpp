@@ -1316,6 +1316,14 @@ void GCodeViewer::rebuild_slider_data_from_segments()
 
 void GCodeViewer::apply_slider_domain()
 {
+    if (m_view_type != EViewType::ActualSpeed) {
+        m_slider_segments_mode = false;
+        m_slider_entries.clear();
+        m_segment_to_slider_idx.clear();
+        update_moves_slider();
+        return;
+    }
+
     if (m_segment_gcode_ids.empty()) {
         m_slider_entries.clear();
         m_segment_to_slider_idx.clear();
@@ -1356,7 +1364,7 @@ void GCodeViewer::apply_slider_domain()
 
 std::pair<unsigned int, unsigned int> GCodeViewer::slider_range_to_segments(unsigned int first, unsigned int last) const
 {
-    if (m_slider_entries.empty())
+    if (!use_segment_slider())
         return { first, last };
 
     first = std::min<unsigned int>(first, static_cast<unsigned int>(m_slider_entries.size() - 1));
@@ -1374,13 +1382,17 @@ std::pair<unsigned int, unsigned int> GCodeViewer::slider_range_to_segments(unsi
 
 size_t GCodeViewer::segment_to_slider_index(size_t segment) const
 {
-    if (m_slider_entries.empty())
-        return 0;
+    if (!use_segment_slider())
+        return segment;
     if (m_segment_to_slider_idx.empty() || segment >= m_segment_to_slider_idx.size())
         return std::min(segment, m_slider_entries.size() - 1);
     return m_segment_to_slider_idx[segment];
 }
 
+bool GCodeViewer::use_segment_slider() const
+{
+    return m_view_type == EViewType::ActualSpeed && !m_slider_entries.empty();
+}
 void GCodeViewer::refresh(const GCodeProcessorResult& gcode_result, const std::vector<std::string>& str_tool_colors)
 {
 #if ENABLE_GCODE_VIEWER_STATISTICS
@@ -2051,6 +2063,37 @@ void GCodeViewer::update_moves_slider(bool set_to_max)
 {
     if (m_moves_slider == nullptr)
         return;
+
+    const bool segment_slider = use_segment_slider();
+
+    if (!segment_slider) {
+        const GCodeViewer::SequentialView &view = get_sequential_view();
+        if (view.endpoints.last < view.endpoints.first) {
+            enable_moves_slider(false);
+            return;
+        }
+
+        enable_moves_slider(true);
+
+        std::vector<double> values(view.endpoints.last - view.endpoints.first + 1);
+        std::vector<double> alternate_values(view.endpoints.last - view.endpoints.first + 1);
+        unsigned int        count = 0;
+        for (unsigned int i = view.endpoints.first; i <= view.endpoints.last; ++i) {
+            values[count] = static_cast<double>(i + 1);
+            if (view.gcode_ids[i] > 0) alternate_values[count] = static_cast<double>(view.gcode_ids[i]);
+            ++count;
+        }
+
+        bool keep_min = m_moves_slider->GetActiveValue() == m_moves_slider->GetMinValue();
+
+        m_moves_slider->SetSliderValues(values);
+        m_moves_slider->SetSliderAlternateValues(alternate_values);
+        m_moves_slider->SetMaxValue(view.endpoints.last - view.endpoints.first);
+        m_moves_slider->SetSelectionSpan(view.current.first - view.endpoints.first, view.current.last - view.endpoints.first);
+        if (set_to_max)
+            m_moves_slider->SetHigherValue(keep_min ? m_moves_slider->GetMinValue() : m_moves_slider->GetMaxValue());
+        return;
+    }
 
     if (m_slider_entries.empty()) {
         enable_moves_slider(false);
