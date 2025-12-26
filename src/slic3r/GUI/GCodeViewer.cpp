@@ -1373,21 +1373,22 @@ std::pair<unsigned int, unsigned int> GCodeViewer::slider_range_to_segments(unsi
         const size_t layer_start = m_sequential_view.endpoints.first;
         const size_t layer_end   = m_sequential_view.endpoints.last;
 
-        auto clamp_to_layer = [layer_start, layer_end](size_t value) {
-            if (value < layer_start)
-                return layer_start;
-            if (value > layer_end)
-                return layer_end;
-            return value;
-        };
+        unsigned int clamped_first = first;
+        if (clamped_first < layer_start)
+            clamped_first = static_cast<unsigned int>(layer_start);
+        if (clamped_first > layer_end)
+            clamped_first = static_cast<unsigned int>(layer_end);
 
-        size_t first_idx = clamp_to_layer(layer_start + static_cast<size_t>(first));
-        size_t last_idx  = clamp_to_layer(layer_start + static_cast<size_t>(last));
+        unsigned int clamped_last = last;
+        if (clamped_last < layer_start)
+            clamped_last = static_cast<unsigned int>(layer_start);
+        if (clamped_last > layer_end)
+            clamped_last = static_cast<unsigned int>(layer_end);
 
-        if (first_idx > last_idx)
-            std::swap(first_idx, last_idx);
+        if (clamped_first > clamped_last)
+            std::swap(clamped_first, clamped_last);
 
-        return { static_cast<unsigned int>(first_idx), static_cast<unsigned int>(last_idx) };
+        return { clamped_first, clamped_last };
     }
 
     if (m_slider_entries.empty())

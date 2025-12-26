@@ -753,6 +753,8 @@ private:
         unsigned int gcode_id{ 0 };
     };
     std::vector<unsigned int> m_segment_gcode_ids;
+    std::vector<SliderEntry>  m_gcode_line_ranges;
+    std::vector<size_t>       m_segment_to_gcode_idx;
     std::vector<SliderEntry>  m_slider_entries;
     std::vector<size_t>       m_segment_to_slider_idx;
     size_t                    m_slider_layer_offset{ 0 };
