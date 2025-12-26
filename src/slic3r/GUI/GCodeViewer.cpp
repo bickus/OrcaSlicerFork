@@ -38,6 +38,8 @@
 
 #include <array>
 #include <algorithm>
+#include <cmath>
+#include <tuple>
 #include <chrono>
 
 namespace Slic3r {
@@ -88,6 +90,9 @@ else if (view_type == GCodeViewer::EViewType::LayerTimeLog)
 static unsigned char buffer_id(EMoveType type) {
     return static_cast<unsigned char>(type) - static_cast<unsigned char>(EMoveType::Retract);
 }
+
+static constexpr float kActualSpeedPreviewMaxChunk = 1.0f; // mm
+static constexpr float kPreviewDistanceEps = 1e-4f;
 
 static EMoveType buffer_type(unsigned char id) {
     return static_cast<EMoveType>(static_cast<unsigned char>(EMoveType::Retract) + id);
@@ -987,7 +992,9 @@ void GCodeViewer::load(const GCodeProcessorResult& gcode_result, const Print& pr
 
     m_max_print_height = gcode_result.printable_height;
 
-    load_toolpaths(gcode_result, build_volume, exclude_bounding_box);
+    rebuild_preview_moves(gcode_result);
+
+    load_toolpaths(gcode_result, m_preview_moves.empty() ? gcode_result.moves : m_preview_moves, build_volume, exclude_bounding_box);
 
     //BBS: add mutex for protection of gcode result
     if (m_layers.empty()) {
@@ -1095,6 +1102,124 @@ void GCodeViewer::load(const GCodeProcessorResult& gcode_result, const Print& pr
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": finished, m_buffers size %1%!")%m_buffers.size();
 }
 
+void GCodeViewer::rebuild_preview_moves(const GCodeProcessorResult& gcode_result)
+{
+    m_preview_moves.clear();
+    m_preview_moves_ready = false;
+
+    const auto& source_moves = gcode_result.moves;
+    if (source_moves.empty())
+        return;
+
+    m_preview_moves.reserve(source_moves.size());
+    m_preview_moves.push_back(source_moves.front());
+
+    for (size_t i = 1; i < source_moves.size(); ++i) {
+        const auto& move = source_moves[i];
+        const bool eligible =
+            (move.type == EMoveType::Extrude || move.type == EMoveType::Travel) &&
+            move.kinematics.has_kinematics &&
+            !move.is_arc_move_with_interpolation_points() &&
+            move.travel_dist > kActualSpeedPreviewMaxChunk + kPreviewDistanceEps;
+
+        if (eligible)
+            append_segmented_move(move, m_preview_moves.back().position);
+        else
+            m_preview_moves.push_back(move);
+    }
+
+    m_preview_moves_ready = true;
+}
+
+void GCodeViewer::append_segmented_move(const GCodeProcessorResult::MoveVertex& move, const Vec3f& start_position)
+{
+    const float total_length = std::max(move.travel_dist, 0.0f);
+    if (total_length <= kActualSpeedPreviewMaxChunk || !std::isfinite(total_length)) {
+        m_preview_moves.push_back(move);
+        return;
+    }
+
+    const Vec3f delta = move.position - start_position;
+    std::vector<float> boundaries;
+    boundaries.reserve(6);
+    boundaries.push_back(0.0f);
+    boundaries.push_back(total_length);
+
+    if (move.kinematics.has_kinematics) {
+        const float accel = std::clamp(move.kinematics.accelerate_distance, 0.0f, total_length);
+        const float cruise = std::clamp(move.kinematics.cruise_distance, 0.0f, total_length);
+        const float decel = std::clamp(move.kinematics.decelerate_distance, 0.0f, total_length);
+        const float accel_end = accel;
+        const float cruise_end = std::min(total_length, accel + cruise);
+        const float decel_start = std::max(0.0f, total_length - decel);
+        auto push_boundary = [&](float value) {
+            if (value > kPreviewDistanceEps && value < total_length - kPreviewDistanceEps)
+                boundaries.push_back(value);
+        };
+        push_boundary(accel_end);
+        push_boundary(cruise_end);
+        push_boundary(decel_start);
+    }
+
+    std::sort(boundaries.begin(), boundaries.end());
+    boundaries.erase(std::unique(boundaries.begin(), boundaries.end(), [](float lhs, float rhs) {
+        return std::abs(lhs - rhs) < kPreviewDistanceEps;
+    }), boundaries.end());
+
+    const auto chunk_flags = [&](float start, float end) {
+        const float accel_end = std::clamp(move.kinematics.accelerate_distance, 0.0f, total_length);
+        const float decel_start = std::max(0.0f, total_length - std::clamp(move.kinematics.decelerate_distance, 0.0f, total_length));
+        const bool in_accel = end <= accel_end + kPreviewDistanceEps;
+        const bool in_decel = start >= decel_start - kPreviewDistanceEps;
+        const bool in_cruise = !in_accel && !in_decel;
+        return std::tuple<bool, bool, bool>(in_accel, in_cruise, in_decel);
+    };
+
+    for (size_t boundary_idx = 1; boundary_idx < boundaries.size(); ++boundary_idx) {
+        float phase_start = boundaries[boundary_idx - 1];
+        float phase_end = boundaries[boundary_idx];
+        if (phase_end - phase_start <= kPreviewDistanceEps)
+            continue;
+
+        float cursor = phase_start;
+        while (cursor + kPreviewDistanceEps < phase_end) {
+            const float chunk_end = std::min(phase_end, cursor + kActualSpeedPreviewMaxChunk);
+            const float chunk_length = chunk_end - cursor;
+            if (chunk_length <= kPreviewDistanceEps) {
+                cursor = chunk_end;
+                continue;
+            }
+
+            GCodeProcessorResult::MoveVertex chunk = move;
+            const float ratio = std::clamp(chunk_length / total_length, 0.0f, 1.0f);
+            chunk.delta_extruder = move.delta_extruder * ratio;
+            chunk.time = move.time * ratio;
+            chunk.layer_duration = move.layer_duration * ratio;
+            chunk.travel_dist = chunk_length;
+
+            const float normalized_end = chunk_end / total_length;
+            chunk.position = start_position + delta * normalized_end;
+            chunk.interpolation_points.clear();
+
+            if (move.kinematics.has_kinematics) {
+                const float entry_speed = move.actual_speed_at(cursor);
+                const float exit_speed = move.actual_speed_at(chunk_end);
+                const float peak_speed = move.actual_speed_at(cursor + 0.5f * chunk_length);
+                chunk.kinematics.entry_speed = entry_speed;
+                chunk.kinematics.exit_speed = exit_speed;
+                chunk.kinematics.peak_speed = peak_speed;
+                const auto [in_accel, in_cruise, in_decel] = chunk_flags(cursor, chunk_end);
+                chunk.kinematics.accelerate_distance = in_accel ? chunk_length : 0.0f;
+                chunk.kinematics.cruise_distance = in_cruise ? chunk_length : 0.0f;
+                chunk.kinematics.decelerate_distance = in_decel ? chunk_length : 0.0f;
+            }
+
+            m_preview_moves.push_back(std::move(chunk));
+            cursor = chunk_end;
+        }
+    }
+}
+
 void GCodeViewer::refresh(const GCodeProcessorResult& gcode_result, const std::vector<std::string>& str_tool_colors)
 {
 #if ENABLE_GCODE_VIEWER_STATISTICS
@@ -1118,6 +1243,9 @@ void GCodeViewer::refresh(const GCodeProcessorResult& gcode_result, const std::v
         gcode_result.unlock();
         return;
     }
+
+    const auto& moves = m_preview_moves.empty() ? gcode_result.moves : m_preview_moves;
+    const size_t moves_count = moves.size();
 
     wxBusyCursor busy;
 
@@ -1147,12 +1275,12 @@ void GCodeViewer::refresh(const GCodeProcessorResult& gcode_result, const std::v
 
     // update ranges for coloring / legend
     m_extrusions.reset_ranges();
-    for (size_t i = 0; i < m_moves_count; ++i) {
+    for (size_t i = 0; i < moves_count; ++i) {
         // skip first vertex
         if (i == 0)
             continue;
 
-        const GCodeProcessorResult::MoveVertex& curr = gcode_result.moves[i];
+        const GCodeProcessorResult::MoveVertex& curr = moves[i];
         const bool is_travel_or_extrude = (curr.type == EMoveType::Extrude || curr.type == EMoveType::Travel);
         if (is_travel_or_extrude) {
             const float actual_speed = actual_speed_for_move(curr);
@@ -1262,6 +1390,8 @@ void GCodeViewer::reset()
     m_sequential_view.gcode_ids.shrink_to_fit();
     m_sequential_view.actual_speeds.clear();
     m_sequential_view.actual_speeds.shrink_to_fit();
+    m_preview_moves.clear();
+    m_preview_moves_ready = false;
 #if ENABLE_GCODE_VIEWER_STATISTICS
     m_statistics.reset_all();
 #endif // ENABLE_GCODE_VIEWER_STATISTICS
@@ -2040,7 +2170,9 @@ void GCodeViewer::export_toolpaths_to_obj(const char* filename) const
     fclose(fp);
 }
 
-void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const BuildVolume& build_volume, const std::vector<BoundingBoxf3>& exclude_bounding_box)
+void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result,
+    const std::vector<GCodeProcessorResult::MoveVertex>& preview_moves,
+    const BuildVolume& build_volume, const std::vector<BoundingBoxf3>& exclude_bounding_box)
 {
     // max index buffer size, in bytes
     static const size_t IBUFFER_THRESHOLD_BYTES = 64 * 1024 * 1024;
@@ -2063,6 +2195,8 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
         }
         log_memory_used(label, vertices_size + indices_size);
     };
+
+    const std::vector<GCodeProcessorResult::MoveVertex>& moves = preview_moves.empty() ? gcode_result.moves : preview_moves;
 
     // format data into the buffers to be rendered as lines
     auto add_vertices_as_line = [](const GCodeProcessorResult::MoveVertex& prev, const GCodeProcessorResult::MoveVertex& curr, VertexBuffer& vertices) {
@@ -2358,11 +2492,11 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
 
 #if ENABLE_GCODE_VIEWER_STATISTICS
     auto start_time = std::chrono::high_resolution_clock::now();
-    m_statistics.results_size = SLIC3R_STDVEC_MEMSIZE(gcode_result.moves, GCodeProcessorResult::MoveVertex);
+    m_statistics.results_size = SLIC3R_STDVEC_MEMSIZE(moves, GCodeProcessorResult::MoveVertex);
     m_statistics.results_time = gcode_result.time;
 #endif // ENABLE_GCODE_VIEWER_STATISTICS
 
-    m_moves_count = gcode_result.moves.size();
+    m_moves_count = moves.size();
     if (m_moves_count == 0)
         return;
 
@@ -2382,7 +2516,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
 
     // extract approximate paths bounding box from result
     //BBS: add only gcode mode
-    for (const GCodeProcessorResult::MoveVertex& move : gcode_result.moves) {
+    for (const GCodeProcessorResult::MoveVertex& move : moves) {
         //if (wxGetApp().is_gcode_viewer()) {
         //if (m_only_gcode_in_preview) {
             // for the gcode viewer we need to take in account all moves to correctly size the printbed
@@ -2398,7 +2532,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
     }
 
     // BBS: also merge the point on arc to bounding box
-    for (const GCodeProcessorResult::MoveVertex& move : gcode_result.moves) {
+    for (const GCodeProcessorResult::MoveVertex& move : moves) {
         // continue if not arc path
         if (!move.is_arc_move_with_interpolation_points())
             continue;
@@ -2452,8 +2586,8 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
 
     m_sequential_view.gcode_ids.clear();
     m_sequential_view.actual_speeds.clear();
-    for (size_t i = 0; i < gcode_result.moves.size(); ++i) {
-        const GCodeProcessorResult::MoveVertex& move = gcode_result.moves[i];
+    for (size_t i = 0; i < moves.size(); ++i) {
+        const GCodeProcessorResult::MoveVertex& move = moves[i];
         if (move.type != EMoveType::Seam)
             m_sequential_view.gcode_ids.push_back(move.gcode_id);
         if (move.type != EMoveType::Seam)
@@ -2473,7 +2607,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
 
     // toolpaths data -> extract vertices from result
     for (size_t i = 0; i < m_moves_count; ++i) {
-        const GCodeProcessorResult::MoveVertex& curr = gcode_result.moves[i];
+        const GCodeProcessorResult::MoveVertex& curr = moves[i];
         if (curr.type == EMoveType::Seam) {
             ++seams_count;
             biased_seams_ids.push_back(i - biased_seams_ids.size() - 1);
@@ -2485,7 +2619,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
         if (i == 0)
             continue;
 
-        const GCodeProcessorResult::MoveVertex& prev = gcode_result.moves[i - 1];
+        const GCodeProcessorResult::MoveVertex& prev = moves[i - 1];
 
         // update progress dialog
         ++progress_count;
@@ -2602,11 +2736,11 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
                 size_t temp_offset = prev_sub_path.last.s_id - curr_s_id;
                 for (size_t i = prev_sub_path.last.s_id; i > curr_s_id; i--) {
                     size_t move_id = m_ssid_to_moveid_map[i];
-                    temp_offset += (gcode_result.moves[move_id].is_arc_move() ? gcode_result.moves[move_id].interpolation_points.size() : 0);
+                    temp_offset += (moves[move_id].is_arc_move() ? moves[move_id].interpolation_points.size() : 0);
                 }
                 if (is_internal_point) {
                     size_t move_id = m_ssid_to_moveid_map[curr_s_id];
-                    temp_offset += (gcode_result.moves[move_id].interpolation_points.size() - interpolation_point_id);
+                    temp_offset += (moves[move_id].interpolation_points.size() - interpolation_point_id);
                 }
                 const size_t next_1st_offset = temp_offset * 6 * vertex_size_floats;
                 // offset into the vertex buffer of the right vertex of the previous segment
@@ -2644,11 +2778,11 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
                 size_t temp_offset = prev_sub_path.last.s_id - curr_s_id;
                 for (size_t i = prev_sub_path.last.s_id; i > curr_s_id; i--) {
                     size_t move_id = m_ssid_to_moveid_map[i];
-                    temp_offset += (gcode_result.moves[move_id].is_arc_move() ? gcode_result.moves[move_id].interpolation_points.size() : 0);
+                    temp_offset += (moves[move_id].is_arc_move() ? moves[move_id].interpolation_points.size() : 0);
                 }
                 if (is_internal_point) {
                     size_t move_id = m_ssid_to_moveid_map[curr_s_id];
-                    temp_offset += (gcode_result.moves[move_id].interpolation_points.size() - interpolation_point_id);
+                    temp_offset += (moves[move_id].interpolation_points.size() - interpolation_point_id);
                 }
                 const size_t next_1st_offset = temp_offset * 6 * vertex_size_floats;
                 // offset into the vertex buffer of the left vertex of the previous segment
@@ -2690,14 +2824,14 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
             for (size_t j = 1; j < path_vertices_count; ++j) {
                 size_t curr_s_id = path.sub_paths.front().first.s_id + j;
                 size_t move_id = m_ssid_to_moveid_map[curr_s_id];
-                int interpolation_points_num = gcode_result.moves[move_id].is_arc_move_with_interpolation_points()?
-                                                    gcode_result.moves[move_id].interpolation_points.size() : 0;
+                int interpolation_points_num = moves[move_id].is_arc_move_with_interpolation_points()?
+                                                    moves[move_id].interpolation_points.size() : 0;
                 int loop_num = interpolation_points_num;
                 //BBS: select the subpaths which contains the previous/next segments
                 if (!path.sub_paths[prev_sub_path_id].contains(curr_s_id))
                     ++prev_sub_path_id;
                 if (j == path_vertices_count - 1) {
-                    if (!gcode_result.moves[move_id].is_arc_move_with_interpolation_points())
+                    if (!moves[move_id].is_arc_move_with_interpolation_points())
                         break;   // BBS: the last move has no internal point.
                     loop_num--;  //BBS: don't need to handle the endpoint of the last arc move of path
                     next_sub_path_id = prev_sub_path_id;
@@ -2711,17 +2845,17 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
                 // BBS: smooth triangle toolpaths corners including arc move which has internal interpolation point
                 for (int k = 0; k <= loop_num; k++) {
                     const Vec3f& prev = k==0?
-                                        gcode_result.moves[move_id - 1].position :
-                                        gcode_result.moves[move_id].interpolation_points[k-1];
+                                        moves[move_id - 1].position :
+                                        moves[move_id].interpolation_points[k-1];
                     const Vec3f& curr = k==interpolation_points_num?
-                                        gcode_result.moves[move_id].position :
-                                        gcode_result.moves[move_id].interpolation_points[k];
+                                        moves[move_id].position :
+                                        moves[move_id].interpolation_points[k];
                     const Vec3f& next = k < interpolation_points_num - 1?
-                                        gcode_result.moves[move_id].interpolation_points[k+1]:
-                                        (k == interpolation_points_num - 1? gcode_result.moves[move_id].position :
-                                        (gcode_result.moves[move_id + 1].is_arc_move_with_interpolation_points()?
-                                        gcode_result.moves[move_id + 1].interpolation_points[0] :
-                                        gcode_result.moves[move_id + 1].position));
+                                        moves[move_id].interpolation_points[k+1]:
+                                        (k == interpolation_points_num - 1? moves[move_id].position :
+                                        (moves[move_id + 1].is_arc_move_with_interpolation_points()?
+                                        moves[move_id + 1].interpolation_points[0] :
+                                        moves[move_id + 1].position));
 
                     const Vec3f prev_dir = (curr - prev).normalized();
                     const Vec3f prev_right = Vec3f(prev_dir.y(), -prev_dir.x(), 0.0f).normalized();
@@ -2873,7 +3007,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
     seams_count = 0;
 
     for (size_t i = 0; i < m_moves_count; ++i) {
-        const GCodeProcessorResult::MoveVertex& curr = gcode_result.moves[i];
+        const GCodeProcessorResult::MoveVertex& curr = moves[i];
         if (curr.type == EMoveType::Seam)
             ++seams_count;
 
@@ -2883,10 +3017,10 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
         if (i == 0)
             continue;
 
-        const GCodeProcessorResult::MoveVertex& prev = gcode_result.moves[i - 1];
+        const GCodeProcessorResult::MoveVertex& prev = moves[i - 1];
         const GCodeProcessorResult::MoveVertex* next = nullptr;
         if (i < m_moves_count - 1)
-            next = &gcode_result.moves[i + 1];
+            next = &moves[i + 1];
 
         ++progress_count;
         if (progress_dialog != nullptr && progress_count % progress_threshold == 0) {
@@ -3036,7 +3170,7 @@ void GCodeViewer::load_toolpaths(const GCodeProcessorResult& gcode_result, const
     size_t last_travel_s_id = 0;
     seams_count = 0;
     for (size_t i = 0; i < m_moves_count; ++i) {
-        const GCodeProcessorResult::MoveVertex& move = gcode_result.moves[i];
+        const GCodeProcessorResult::MoveVertex& move = moves[i];
         if (move.type == EMoveType::Seam)
             ++seams_count;
 

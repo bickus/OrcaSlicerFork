@@ -745,6 +745,9 @@ private:
     bool m_only_gcode_in_preview {false};
     std::vector<size_t> m_ssid_to_moveid_map;
 
+    std::vector<GCodeProcessorResult::MoveVertex> m_preview_moves;
+    bool m_preview_moves_ready{ false };
+
     std::vector<TBuffer> m_buffers{ static_cast<size_t>(EMoveType::Extrude) };
     // bounding box of toolpaths
     BoundingBoxf3 m_paths_bounding_box;
@@ -895,7 +898,10 @@ public:
     void pop_combo_style();
 
 private:
-    void load_toolpaths(const GCodeProcessorResult& gcode_result, const BuildVolume& build_volume, const std::vector<BoundingBoxf3>& exclude_bounding_box);
+    void load_toolpaths(const GCodeProcessorResult& gcode_result, const std::vector<GCodeProcessorResult::MoveVertex>& preview_moves,
+        const BuildVolume& build_volume, const std::vector<BoundingBoxf3>& exclude_bounding_box);
+    void rebuild_preview_moves(const GCodeProcessorResult& gcode_result);
+    void append_segmented_move(const GCodeProcessorResult::MoveVertex& move, const Vec3f& start_position);
     //BBS: always load shell at preview
     //void load_shells(const Print& print);
     void refresh_render_paths(bool keep_sequential_current_first, bool keep_sequential_current_last) const;
