@@ -377,20 +377,43 @@ If performance is insufficient:
 
 ## Rollout Strategy
 
-### 5.11 Feature Flag
+### 5.11 Automatic Mode Selection (NO New User Parameters)
 
-Use a feature flag for gradual rollout:
+**IMPORTANT: This implementation does NOT add any new user-facing parameters or settings.**
+
+The estimator mode is selected **automatically** based on the printer's G-code flavor:
 
 ```cpp
-// In preferences/settings
-bool use_klipper_time_estimation = true;  // Default on for Klipper printers
+// In GCodeProcessor::apply_config - AUTOMATIC selection, no user setting needed
+void GCodeProcessor::apply_config(const PrintConfig& config) {
+    // ...existing code...
 
-// In GCodeProcessor::apply_config
-if (m_flavor == gcfKlipper && use_klipper_time_estimation) {
+    // Estimator mode is determined by G-code flavor - NOT a user setting
+    EstimatorMode mode = (m_flavor == gcfKlipper)
+        ? EstimatorMode::Klipper
+        : EstimatorMode::Legacy;
+
     for (auto& machine : m_time_processor.machines) {
-        machine.estimator_mode = EstimatorMode::Klipper;
+        machine.estimator_mode = mode;
     }
 }
+```
+
+**Why no user-facing toggle?**
+1. The correct algorithm depends on firmware, not user preference
+2. Using the wrong algorithm would give worse results, not better
+3. Reduces configuration complexity
+4. Users already select firmware via G-code flavor - that's sufficient
+
+**Developer/Debug Override (compile-time only):**
+
+For testing purposes, a compile-time flag can force legacy mode:
+
+```cpp
+// ONLY for development/debugging - not exposed to users
+#ifdef FORCE_LEGACY_TIME_ESTIMATOR
+    machine.estimator_mode = EstimatorMode::Legacy;
+#endif
 ```
 
 ### 5.12 Logging for Debugging
