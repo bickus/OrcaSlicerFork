@@ -28,6 +28,11 @@ class Print;
 #define NOT_GENERATE_TIMELAPSE                                      "not_generate_timelapse"
 #define LONG_RETRACTION_WHEN_CUT                                    "activate_long_retraction_when_cut"
 
+    enum class EstimatorMode : uint8_t {
+        Legacy = 0,   // Marlin-like jerk-based algorithm (unchanged)
+        Klipper = 1   // Junction deviation algorithm
+    };
+
     enum class EMoveType : unsigned char
     {
         Noop,
@@ -475,6 +480,30 @@ class Print;
             FeedrateProfile feedrate_profile;
             Trapezoid trapezoid;
 
+            // Klipper-specific fields (only used when estimator_mode == Klipper)
+            struct KlipperFields {
+                Vec3f rate_xyz{Vec3f::Zero()};  // Unit direction vector for XYZ
+                float rate_e{0.0f};              // Extruder rate (signed)
+
+                float max_cruise_v2{0.0f};       // Maximum cruise velocity squared
+                float max_dv2{0.0f};             // Max delta-v squared (from acceleration)
+                float smoothed_dv2{0.0f};        // Smoothed delta-v squared (accel_to_decel)
+
+                float max_start_v2{0.0f};        // Max start velocity squared (from junction)
+                float max_smoothed_v2{0.0f};     // Max smoothed start velocity squared
+
+                float junction_deviation{0.0f};  // Junction deviation for this move
+
+                bool is_kinematic{true};         // false for E-only moves
+                bool has_xy_motion{true};        // false for Z-only or E-only moves
+
+                // Resolved velocities (set by two-pass planner)
+                float resolved_start_v{0.0f};
+                float resolved_cruise_v{0.0f};
+                float resolved_end_v{0.0f};
+            };
+            KlipperFields klipper;
+
             // Calculates this block's trapezoid
             void calculate_trapezoid();
             bool has_cruise_ratio() const { return cruise_ratio > 0.0f; }
@@ -535,6 +564,19 @@ class Print;
             float square_corner_velocity{ 5.0f }; // mm/s
             GCodeProcessor* owner{ nullptr };
             bool klipper_mode{ false };
+
+            struct KlipperState {
+                float junction_deviation{0.0f};      // Derived from jerk²/max_accel
+                float accel_to_decel{50.0f};         // Derived from cruise_ratio
+                float instant_corner_velocity{1.0f}; // From machine_max_jerk_e
+
+                // Indicates if Klipper state is properly initialized
+                bool initialized{false};
+            };
+
+            EstimatorMode estimator_mode{EstimatorMode::Legacy};
+            KlipperState klipper_state;
+
             bool collect_kinematics{ false };
             PrintEstimatedStatistics::ETimeMode time_mode{ PrintEstimatedStatistics::ETimeMode::Normal };
             struct StopTime

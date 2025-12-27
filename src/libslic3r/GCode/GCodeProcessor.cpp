@@ -103,6 +103,22 @@ std::optional<float> parse_time_after_keyword(const std::string& lower_comment, 
     return parse_time_seconds(value);
 }
 
+// Compute junction_deviation from jerk (which IS SCV for Klipper) and max acceleration
+// Formula: junction_deviation = jerk² * 0.41421356 / max_acceleration
+// The 0.41421356 = sqrt(2) - 1, derived from Klipper's junction geometry
+float compute_junction_deviation(float jerk_as_scv, float max_accel) {
+    if (max_accel <= 0.0f) return 0.0f;
+    constexpr float SQRT2_MINUS_1 = 0.41421356f;
+    return (jerk_as_scv * jerk_as_scv) * SQRT2_MINUS_1 / max_accel;
+}
+
+// Compute accel_to_decel from max_acceleration and cruise_ratio
+// In Klipper: accel_to_decel = max_accel * (1 - cruise_ratio)
+// OrcaSlicer doesn't have cruise_ratio directly, so we use a default
+float compute_accel_to_decel(float max_accel, float cruise_ratio = 0.5f) {
+    return max_accel * (1.0f - cruise_ratio);
+}
+
 } // namespace
 
 static constexpr double kPI = 3.14159265358979323846;
@@ -430,7 +446,9 @@ static void recalculate_trapezoids(std::vector<GCodeProcessor::TimeBlock>& block
     }
 }
 
-void GCodeProcessor::TimeMachine::calculate_time(size_t keep_last_n_blocks, float additional_time)
+// Renamed from calculate_time - this is the EXISTING implementation for Marlin, RRF, etc.
+// DO NOT MODIFY THIS FUNCTION - it preserves legacy behavior
+void GCodeProcessor::TimeMachine::calculate_time_legacy(size_t keep_last_n_blocks, float additional_time)
 {
     if (!enabled || blocks.size() < 2)
         return;
@@ -486,6 +504,28 @@ void GCodeProcessor::TimeMachine::calculate_time(size_t keep_last_n_blocks, floa
         blocks.erase(blocks.begin(), blocks.begin() + n_blocks_process);
     else
         blocks.clear();
+}
+
+// New Klipper implementation stub (to be implemented in later deliverables)
+void GCodeProcessor::TimeMachine::calculate_time_klipper(size_t keep_last_n_blocks, float additional_time)
+{
+    // TODO: Implement in Deliverable 4
+    // For now, fall back to legacy to maintain current behavior
+    calculate_time_legacy(keep_last_n_blocks, additional_time);
+}
+
+// Dispatcher based on estimator mode
+void GCodeProcessor::TimeMachine::calculate_time(size_t keep_last_n_blocks, float additional_time)
+{
+    switch (estimator_mode) {
+        case EstimatorMode::Klipper:
+            calculate_time_klipper(keep_last_n_blocks, additional_time);
+            break;
+        case EstimatorMode::Legacy:
+        default:
+            calculate_time_legacy(keep_last_n_blocks, additional_time);
+            break;
+    }
 }
 
 void GCodeProcessor::TimeProcessor::reset()
@@ -887,6 +927,31 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
                                                                                                   DEFAULT_TRAVEL_ACCELERATION;
         m_time_processor.machines[i].minimum_cruise_ratio =
             static_cast<float>(m_time_processor.machine_limits.klipper_cruise_ratio.value);
+
+        // Determine estimator mode from gcode flavor
+        // This is AUTOMATIC - not a user setting
+        EstimatorMode mode = (m_flavor == gcfKlipper)
+            ? EstimatorMode::Klipper
+            : EstimatorMode::Legacy;
+
+        m_time_processor.machines[i].estimator_mode = mode;
+
+        // Initialize Klipper state if needed
+        if (mode == EstimatorMode::Klipper) {
+            // Get jerk values - these ARE SCV for Klipper
+            float scv = std::min(
+                static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_x, i)),
+                static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_y, i))
+            );
+            float extruder_icv = static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_e, i));
+
+            m_time_processor.machines[i].klipper_state.junction_deviation =
+                compute_junction_deviation(scv, max_acceleration);
+            m_time_processor.machines[i].klipper_state.accel_to_decel =
+                compute_accel_to_decel(max_acceleration, m_time_processor.machines[i].minimum_cruise_ratio);
+            m_time_processor.machines[i].klipper_state.instant_corner_velocity = extruder_icv;
+            m_time_processor.machines[i].klipper_state.initialized = true;
+        }
     }
 
     m_disable_m73 = config.disable_m73;
