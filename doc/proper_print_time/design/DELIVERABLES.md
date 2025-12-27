@@ -50,9 +50,32 @@ Establish the infrastructure for Klipper-compatible time estimation without chan
 ### Validation Criteria
 - [ ] Builds without errors
 - [ ] All existing tests pass
-- [ ] Time estimates unchanged (EstimatorMode::Legacy is default)
+- [ ] **CRITICAL: Non-Klipper printers produce IDENTICAL time estimates** (run before/after comparison)
+- [ ] Time estimates unchanged when EstimatorMode::Legacy is used
 - [ ] Klipper flavor printers correctly set EstimatorMode::Klipper
+- [ ] Non-Klipper flavor printers use EstimatorMode::Legacy
 - [ ] New fields initialized to reasonable defaults
+
+### Non-Regression Test (REQUIRED)
+
+Before merging this deliverable, run the following test:
+
+```bash
+# 1. Slice a test model with a MARLIN printer profile BEFORE changes
+orca_slicer --export-gcode --load marlin_profile.ini test.3mf -o before.gcode
+
+# 2. Apply changes and rebuild
+
+# 3. Slice the same model with the same profile AFTER changes
+orca_slicer --export-gcode --load marlin_profile.ini test.3mf -o after.gcode
+
+# 4. Compare - time estimates MUST be identical
+diff <(grep "estimated printing time" before.gcode) \
+     <(grep "estimated printing time" after.gcode)
+# Expected: No difference
+```
+
+Repeat for RepRapFirmware, Smoothieware, and other non-Klipper profiles.
 
 ### Dependencies
 None (first deliverable)
@@ -285,40 +308,67 @@ Deliverable 5
 ## Deliverable 7: Validation and Testing (Estimated: 2-3 days)
 
 ### Scope
-Comprehensive testing and validation against klipper_estimator.
+Comprehensive testing and validation against klipper_estimator, plus verification that non-Klipper printers remain unchanged.
 
 ### Files to Create/Modify
 - `tests/libslic3r/test_klipper_time_estimation.cpp`
+- `tests/libslic3r/test_legacy_time_estimation_unchanged.cpp`
 - Validation scripts
 
 ### Tasks
 
-1. **Create unit test suite**
+1. **Create unit test suite for Klipper algorithm**
    - Junction velocity tests
    - Trapezoid calculation tests
    - Edge case tests
 
-2. **Create integration test suite**
+2. **Create integration test suite for Klipper**
    - Simple shapes (cube, cylinder)
    - Complex infill patterns
    - Travel-heavy prints
 
-3. **Create validation harness**
+3. **Create validation harness for klipper_estimator comparison**
    - Compare with klipper_estimator
    - Automated comparison script
 
-4. **Profile performance**
+4. **Create NON-REGRESSION test suite for Legacy algorithm**
+   - Test Marlin profiles produce identical results
+   - Test RepRapFirmware profiles produce identical results
+   - Test other non-Klipper profiles produce identical results
+   - Compare against baseline captures from BEFORE implementation
+
+5. **Profile performance**
    - Measure time estimation overhead
    - Optimize if needed
 
-5. **Document known limitations**
+6. **Document known limitations**
    - Update ASSUMPTIONS.md with any new findings
 
 ### Validation Criteria
-- [ ] All unit tests pass
+- [ ] All Klipper unit tests pass
 - [ ] ±5% accuracy vs klipper_estimator on test suite
+- [ ] **CRITICAL: All Legacy/non-Klipper tests produce IDENTICAL results to baseline**
 - [ ] <100ms overhead for 1-hour print
 - [ ] No crashes on edge cases
+
+### Non-Klipper Regression Testing
+
+Create baseline captures BEFORE implementation:
+```bash
+# Generate baselines for multiple firmware types
+for profile in marlin rrf smoothie repetier; do
+    orca_slicer --export-gcode --load ${profile}.ini test.3mf -o baseline_${profile}.gcode
+done
+```
+
+After implementation, verify identical output:
+```bash
+for profile in marlin rrf smoothie repetier; do
+    orca_slicer --export-gcode --load ${profile}.ini test.3mf -o after_${profile}.gcode
+    diff baseline_${profile}.gcode after_${profile}.gcode
+    # MUST show no difference
+done
+```
 
 ### Dependencies
 Deliverable 6

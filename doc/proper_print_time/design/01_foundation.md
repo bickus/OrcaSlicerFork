@@ -4,12 +4,14 @@
 
 This phase establishes the foundation for Klipper-compatible time estimation without disrupting existing functionality. The key principle is **feature-flagging**: all new code paths are guarded by an estimator mode flag, allowing gradual rollout and easy rollback.
 
+**CRITICAL REQUIREMENT**: The existing time estimation code for Marlin, RepRapFirmware, and other non-Klipper printers must remain **completely unchanged**. This implementation is ADDITIVE - we are adding a new code path for Klipper, not modifying the existing one.
+
 ## Goals
 
 1. Introduce `EstimatorMode` enum to toggle between legacy and Klipper algorithms
 2. Expose/add configuration parameters needed for Klipper estimation
 3. Create data structures for the new planner
-4. Ensure zero behavioral changes when using legacy mode
+4. **Ensure the Legacy code path is not modified - only renamed and wrapped**
 
 ---
 
@@ -188,33 +190,46 @@ if (m_flavor == gcfKlipper) {
 
 ---
 
-### 1.4 Feature-Flag Guard Pattern
+### 1.4 Feature-Flag Guard Pattern (CRITICAL)
 
-All new code paths should be guarded to ensure legacy behavior is preserved:
+All new code paths should be guarded to ensure legacy behavior is preserved. **The existing code is NOT modified - only renamed and wrapped.**
 
 ```cpp
-// Pattern for calculate_time()
+// STEP 1: Rename the existing calculate_time() to calculate_time_legacy()
+// This is a RENAME ONLY - the implementation is NOT changed
+void TimeMachine::calculate_time_legacy() {
+    // ============================================================
+    // THIS IS THE EXISTING CODE - COPIED VERBATIM, NOT MODIFIED
+    // All existing logic for Marlin, RRF, etc. remains here
+    // ============================================================
+
+    // ... existing forward pass ...
+    // ... existing reverse pass ...
+    // ... existing trapezoid calculation ...
+    // ... existing time accumulation ...
+}
+
+// STEP 2: Create new wrapper that dispatches based on mode
 void TimeMachine::calculate_time() {
-    if (estimator_mode == EstimatorMode::Klipper ||
-        estimator_mode == EstimatorMode::KlipperSimple) {
-        calculate_time_klipper();
+    if (estimator_mode == EstimatorMode::Klipper) {
+        calculate_time_klipper();  // NEW code for Klipper only
     } else {
-        calculate_time_legacy();
+        calculate_time_legacy();   // EXISTING code for all other firmware
     }
 }
 
-// Rename existing calculate_time to calculate_time_legacy
-void TimeMachine::calculate_time_legacy() {
-    // All existing code goes here unchanged
-}
-
-// New method for Klipper calculation (stub for now)
+// STEP 3: New method for Klipper calculation (implemented in Phase 3)
 void TimeMachine::calculate_time_klipper() {
-    // Will be implemented in Phase 3
-    // For now, fall back to legacy
-    calculate_time_legacy();
+    // NEW implementation for Klipper printers only
+    // This is completely separate from calculate_time_legacy()
 }
 ```
+
+**Key Points:**
+1. `calculate_time_legacy()` IS the existing `calculate_time()` - just renamed
+2. The implementation of `calculate_time_legacy()` is NOT changed in any way
+3. `calculate_time_klipper()` is entirely NEW code
+4. Non-Klipper printers never execute any Klipper-specific code
 
 ---
 

@@ -2,20 +2,50 @@
 
 ## Executive Summary
 
-This document series describes the implementation plan for replacing OrcaSlicer's current print time estimation logic with a Klipper-compatible algorithm that accurately predicts print duration for Klipper-based printers. The new implementation will also improve accuracy for other firmware types.
+This document series describes the implementation plan for adding a **Klipper-specific** time estimation algorithm to OrcaSlicer. The existing Marlin-compatible algorithm remains **completely unchanged** and continues to be used for all non-Klipper printers.
+
+**Critical Design Principle**: This is an ADDITIVE change. We are adding a new code path for Klipper printers while preserving the existing code path for Marlin, RepRapFirmware, and all other firmware types.
 
 ## Problem Statement
 
 ### Current State
 - OrcaSlicer uses a Marlin-like jerk-based algorithm for time estimation
-- Print time estimates for Klipper printers are often 15-30% too pessimistic
+- This algorithm works well for Marlin, RepRapFirmware, and similar firmware
+- Print time estimates for **Klipper printers specifically** are often 15-30% too pessimistic
 - The existing `klipper_actual_speed` feature adds visualization but explicitly avoids changing time estimation
 - Key Klipper concepts (junction deviation, two-pass planning, proper lookahead) are not implemented
 
 ### Desired State
-- Accurate print time estimation (±5%) for Klipper printers
-- Maintained or improved accuracy for other firmware types
+- Accurate print time estimation (±5%) for Klipper printers using a Klipper-specific algorithm
+- **Marlin and other firmware types continue using the existing algorithm unchanged**
 - Per-layer and per-feature time breakdowns match actual print behavior
+
+## Firmware-Specific Approach
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    G-code Flavor Detection                       │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+              ┌───────────────┴───────────────┐
+              │                               │
+              ▼                               ▼
+┌─────────────────────────┐     ┌─────────────────────────────────┐
+│   gcfKlipper            │     │   All Other Flavors              │
+│   (Klipper firmware)    │     │   (Marlin, RRF, Smoothie, etc.) │
+└─────────────────────────┘     └─────────────────────────────────┘
+              │                               │
+              ▼                               ▼
+┌─────────────────────────┐     ┌─────────────────────────────────┐
+│   EstimatorMode::Klipper│     │   EstimatorMode::Legacy          │
+│   NEW algorithm         │     │   EXISTING algorithm (unchanged) │
+│   - Junction deviation  │     │   - Jerk-based junctions         │
+│   - Two-pass planning   │     │   - Current forward/reverse pass │
+│   - SCV corner limiting │     │   - Current trapezoid calc       │
+└─────────────────────────┘     └─────────────────────────────────┘
+```
+
+**The Legacy path is the EXISTING code. It is not modified in any way.**
 
 ## Architecture Overview
 
@@ -67,17 +97,20 @@ This document series describes the implementation plan for replacing OrcaSlicer'
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Key Differences from Current Implementation
+## Algorithm Comparison (Klipper Mode vs Legacy Mode)
 
-| Aspect | Current OrcaSlicer | Klipper Algorithm |
-|--------|-------------------|-------------------|
-| Junction velocity | Jerk-based (Marlin style) | Junction deviation + centripetal |
+The following table compares the NEW Klipper algorithm with the EXISTING Legacy algorithm. **The Legacy algorithm remains unchanged and is used for all non-Klipper printers.**
+
+| Aspect | Legacy Mode (Marlin/RRF/etc.) | Klipper Mode (Klipper only) |
+|--------|-------------------------------|----------------------------|
+| Junction velocity | Jerk-based (current code) | Junction deviation + centripetal |
 | Corner speed | Uses `machine_max_jerk_*` | Uses `square_corner_velocity` |
 | Velocity planning | Basic forward/reverse pass | Full two-pass with smoothing |
-| Lookahead | Not implemented (flag only) | Velocity constraint propagation |
-| Cruise ratio | Stored but not used in time calc | Enforces minimum cruise distance |
-| Axis limits | Partially implemented | Full per-axis velocity/accel limits |
-| Extruder limits | Basic | Proper instantaneous corner velocity |
+| Lookahead | Current implementation | Velocity constraint propagation |
+| Cruise ratio | Current behavior | Enforces minimum cruise distance |
+| Axis limits | Current implementation | Full per-axis velocity/accel limits |
+| Extruder limits | Current implementation | Proper instantaneous corner velocity |
+| **Code path** | **EXISTING (unchanged)** | **NEW (additive)** |
 
 ## Implementation Phases
 
@@ -143,10 +176,22 @@ This document series describes the implementation plan for replacing OrcaSlicer'
 
 ## Success Criteria
 
-1. **Accuracy**: Print time estimates within ±5% of actual for Klipper printers
-2. **Regression**: Non-Klipper printers maintain current accuracy (±10%)
+1. **Klipper Accuracy**: Print time estimates within ±5% of actual for Klipper printers
+2. **Non-Klipper Unchanged**: Marlin, RepRapFirmware, and other non-Klipper printers produce **byte-identical** time estimates (same code path, zero changes)
 3. **Performance**: Time estimation adds <100ms to G-code processing
 4. **Compatibility**: All existing features (preview, layer times, etc.) continue to work
+
+### Non-Regression Guarantee
+
+The following firmware types will use the **existing, unmodified** Legacy algorithm:
+- Marlin / Marlin 2
+- RepRapFirmware (RRF)
+- Smoothieware
+- Repetier
+- Mach3/Mach4
+- Any firmware where `gcode_flavor != gcfKlipper`
+
+**Only printers explicitly configured with Klipper G-code flavor will use the new algorithm.**
 
 ## Document Index
 

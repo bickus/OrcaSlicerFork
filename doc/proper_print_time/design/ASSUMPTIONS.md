@@ -155,32 +155,57 @@ This document records all assumptions made during the design of the Klipper-comp
 
 ---
 
-## Compatibility Assumptions
+## Compatibility Assumptions (CRITICAL)
 
-### A13: Legacy Mode Unchanged
+### A13: Legacy Mode Code Path is UNTOUCHED
 
-**Assumption**: When `EstimatorMode::Legacy` is selected, all existing behavior is preserved exactly.
+**Assumption**: The existing time estimation code (Legacy mode) is **not modified in any way**. The new Klipper algorithm is implemented as a completely separate code path.
 
-**Rationale**: This allows:
-1. Gradual rollout
-2. Easy A/B testing
-3. Fallback for unexpected issues
-4. Non-Klipper printers to continue working
+**Rationale**: This guarantees:
+1. Zero risk of regression for Marlin, RepRapFirmware, and other firmware
+2. Byte-identical time estimates for non-Klipper printers before and after this change
+3. Easy rollback by simply not selecting Klipper mode
+4. Clear separation of concerns
 
-**Implementation**: Feature-flagged code paths with no shared state mutations.
+**Implementation**:
+```cpp
+void TimeMachine::calculate_time() {
+    if (estimator_mode == EstimatorMode::Klipper) {
+        calculate_time_klipper();  // NEW code path
+    } else {
+        calculate_time_legacy();   // EXISTING code, renamed but unchanged
+    }
+}
+```
+
+The `calculate_time_legacy()` function is the EXISTING `calculate_time()` function, renamed. Its implementation is NOT modified.
 
 ---
 
-### A14: Non-Klipper Printers Use Legacy
+### A14: Non-Klipper Printers ALWAYS Use Legacy
 
-**Assumption**: Only printers with `gcode_flavor == gcfKlipper` use the new estimator by default.
+**Assumption**: Only printers with `gcode_flavor == gcfKlipper` use the new estimator. All other printers use the existing Legacy algorithm.
+
+**Affected firmware (use Legacy - UNCHANGED):**
+- Marlin / Marlin 2
+- RepRapFirmware (RRF)
+- Smoothieware
+- Repetier
+- Mach3 / Mach4
+- Sailfish
+- Teacup
+- Any other non-Klipper firmware
+
+**Only affected firmware (uses NEW Klipper algorithm):**
+- Klipper (gcfKlipper)
 
 **Rationale**:
-1. Algorithm is specifically designed for Klipper's motion system
-2. Other firmware (Marlin, RRF) have different motion planners
-3. Prevents unexpected changes for existing users
+1. The Klipper algorithm is specifically designed for Klipper's unique motion system
+2. Marlin's jerk-based system is fundamentally different from Klipper's junction deviation
+3. Applying the wrong algorithm would make estimates WORSE, not better
+4. Each firmware should ideally have its own algorithm matching its motion planner
 
-**Future**: Could add support for other firmware with their specific algorithms.
+**Future Consideration**: Other firmware-specific algorithms could be added later (e.g., Marlin 2's S-curve acceleration), but that is OUT OF SCOPE for this implementation.
 
 ---
 
