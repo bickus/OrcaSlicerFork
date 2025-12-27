@@ -22,19 +22,37 @@ The fix separates time estimation from preview kinematics by:
    - No SCV junction limiting in time calculation
    - Single lookahead iteration (original behavior)
 
-2. **Preserving preview kinematics with Klipper constraints**:
-   - `record_block_kinematics()` now recalculates trapezoid segments with cruise ratio limiting
+2. **Storing both unlimited and SCV-limited junction velocities**:
+   - `process_G1()` and `process_G2_G3()` now calculate both values
+   - Unlimited `vmax_junction` is used for time estimation
+   - SCV-limited `scv_max_entry_speed` is stored for preview use
+   - Minimal extra computation since SCV is calculated alongside time estimation
+
+3. **Preserving preview kinematics with full Klipper constraints**:
+   - `record_block_kinematics()` applies SCV-limited entry speed when available
+   - Then applies cruise ratio limiting on top of SCV
    - Preview visualization shows "actual" speeds that respect Klipper's motion constraints
    - Limiting factor detection (`CruiseRatio`, `SCV`, etc.) remains functional for tooltips
 
 ## Implementation Details
 
 ### Files Modified
+- `src/libslic3r/GCode/GCodeProcessor.hpp`
 - `src/libslic3r/GCode/GCodeProcessor.cpp`
 
 ### Key Changes
 
-#### 1. `TimeBlock::calculate_trapezoid()`
+#### 1. `TimeBlock` Structure (GCodeProcessor.hpp)
+Added `scv_max_entry_speed` field to store SCV-limited junction velocity:
+```cpp
+struct TimeBlock {
+    float max_entry_speed{ 0.0f };     // mm/s - for time estimation
+    float scv_max_entry_speed{ 0.0f }; // mm/s - SCV-limited junction speed for preview
+    // ...
+};
+```
+
+#### 2. `TimeBlock::calculate_trapezoid()`
 Reverted to original implementation that calculates standard trapezoidal motion profile:
 ```cpp
 void GCodeProcessor::TimeBlock::calculate_trapezoid()
@@ -46,7 +64,7 @@ void GCodeProcessor::TimeBlock::calculate_trapezoid()
 }
 ```
 
-#### 2. Lookahead Passes
+#### 3. Lookahead Passes
 Reverted to use `block.distance` instead of `cruise_ratio_delta_distance(block)`:
 ```cpp
 static void planner_forward_pass_kernel(...)
@@ -56,7 +74,7 @@ static void planner_forward_pass_kernel(...)
 }
 ```
 
-#### 3. `TimeMachine::calculate_time()`
+#### 4. `TimeMachine::calculate_time()`
 Reverted to single iteration:
 ```cpp
 // forward_pass
@@ -70,27 +88,54 @@ for (int i = static_cast<int>(blocks.size()) - 1; i > 0; --i)
 recalculate_trapezoids(blocks);
 ```
 
-#### 4. `record_block_kinematics()`
-Now recalculates preview kinematics with cruise ratio constraints:
+#### 5. SCV Calculation in `process_G1()` / `process_G2_G3()`
+Now calculates both unlimited and SCV-limited junction velocities:
+```cpp
+// After jerk limiting...
+if (limited)
+    vmax_junction *= v_factor;
+
+// Calculate SCV-limited junction velocity for Klipper preview (stored separately)
+float vmax_junction_scv = vmax_junction;
+if (is_klipper && block.has_xy_motion) {
+    // Calculate corner velocity based on turn angle
+    float v_corner = current_scv(...) / sin_half;
+    if (v_corner < vmax_junction_scv) {
+        vmax_junction_scv = v_corner;
+        block.scv_limited = true;
+    }
+}
+
+// Store SCV-limited junction velocity for preview
+block.scv_max_entry_speed = vmax_junction_scv;
+
+// Time estimation uses unlimited vmax_junction
+block.max_entry_speed = vmax_junction;
+```
+
+#### 6. `record_block_kinematics()`
+Now applies both SCV and cruise ratio constraints for preview:
 ```cpp
 void GCodeProcessor::record_block_kinematics(const TimeBlock& block, ...)
 {
     // Start with time estimation values
-    float peak_speed = block.trapezoid.cruise_feedrate;
+    float entry_speed = block.feedrate_profile.entry;
     // ...
 
-    // For preview, apply cruise ratio limiting
+    // First apply SCV-limited entry speed if applicable
+    if (block.scv_limited && block.scv_max_entry_speed < entry_speed) {
+        entry_speed = block.scv_max_entry_speed;
+        // Recalculate trapezoid with SCV-limited entry
+    }
+
+    // Then apply cruise ratio limiting on top of SCV
     if (block.has_cruise_ratio() && ...) {
         // Recalculate trapezoid with limited peak speed
-        // This affects preview display but NOT time estimation
     }
 }
 ```
 
-#### 5. Removed SCV Junction Limiting
-Removed the SCV corner velocity limiting code from `process_G1()` and `process_G2_G3()` that was affecting junction velocity calculations for time estimation.
-
-#### 6. Removed Unused Function
+#### 7. Removed Unused Function
 Removed `cruise_ratio_delta_distance()` as it's no longer needed in the time estimation path.
 
 ## Behavior Summary
@@ -98,22 +143,22 @@ Removed `cruise_ratio_delta_distance()` as it's no longer needed in the time est
 | Feature | Time Estimation | Preview Kinematics |
 |---------|-----------------|-------------------|
 | Cruise ratio limiting | Not applied | Applied |
-| SCV corner limiting | Not applied | Not applied* |
+| SCV corner limiting | Not applied | Applied |
 | Multiple iterations | 1 iteration | N/A |
+| Junction velocity | Unlimited | SCV-limited stored |
 | Trapezoid calculation | Original algorithm | Recalculated with limits |
 
-*Note: SCV limiting for preview would require storing junction velocity data from the planning phase, which adds complexity. The current fix focuses on cruise ratio limiting which has the most significant impact on preview accuracy.
+## Design Rationale
+The approach of storing both SCV-limited and unlimited junction velocities provides:
+
+1. **Minimal overhead**: SCV calculation happens during the same pass as time estimation
+2. **Clean separation**: Time estimation code path is completely unchanged
+3. **Full preview accuracy**: Preview shows speeds limited by both SCV and cruise ratio
+4. **Correct tooltips**: Limiting factor correctly identifies "SCV" or "CruiseRatio"
 
 ## Testing Considerations
 - Time estimates should match pre-Klipper-feature behavior
-- Preview "Actual Speed" visualization should still show cruise-ratio-limited speeds
-- Limiting factor tooltips should correctly identify "CruiseRatio" when applicable
-- Non-Klipper printers should be completely unaffected
-
-## Future Enhancements
-If more accurate Klipper preview kinematics are desired (including SCV and full lookahead effects), a more comprehensive refactor could:
-1. Run the planner twice: once for time, once for preview
-2. Store both trapezoid sets in the TimeBlock
-3. Use appropriate values for each purpose
-
-However, this adds complexity and performance overhead. The current solution provides a good balance of accuracy and simplicity.
+- Preview "Actual Speed" visualization should show both SCV and cruise-ratio-limited speeds
+- Limiting factor tooltips should correctly identify "SCV" when corner velocity limits
+- Limiting factor tooltips should correctly identify "CruiseRatio" when cruise ratio limits
+- Non-Klipper printers should be completely unaffected (no SCV calculation, no cruise ratio)

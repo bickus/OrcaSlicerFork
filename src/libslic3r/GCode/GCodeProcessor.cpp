@@ -3154,6 +3154,34 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
             if (limited)
                 vmax_junction *= v_factor;
 
+            // Calculate SCV-limited junction velocity for Klipper preview (stored separately)
+            float vmax_junction_scv = vmax_junction;
+            if (is_klipper && block.has_xy_motion) {
+                auto has_xy_direction = [](const Vec3f& dir) {
+                    return std::abs(dir.x()) > 1e-5f || std::abs(dir.y()) > 1e-5f;
+                };
+                if (has_xy_direction(prev.exit_direction) && has_xy_direction(curr.enter_direction)) {
+                    Vec3f prev_xy = prev.exit_direction;
+                    prev_xy.z() = 0.0f;
+                    Vec3f curr_xy = curr.enter_direction;
+                    curr_xy.z() = 0.0f;
+                    float prev_norm = prev_xy.norm();
+                    float curr_norm = curr_xy.norm();
+                    if (prev_norm > 1e-5f && curr_norm > 1e-5f) {
+                        prev_xy /= prev_norm;
+                        curr_xy /= curr_norm;
+                        float dot = std::clamp(prev_xy.dot(curr_xy), -1.0f, 1.0f);
+                        float theta = std::acos(dot);
+                        float sin_half = std::max(std::sin(0.5f * theta), 1e-4f);
+                        float v_corner = current_scv(static_cast<PrintEstimatedStatistics::ETimeMode>(i)) / sin_half;
+                        if (v_corner < vmax_junction_scv) {
+                            vmax_junction_scv = v_corner;
+                            block.scv_limited = true;
+                        }
+                    }
+                }
+            }
+
             // Now the transition velocity is known, which maximizes the shared exit / entry velocity while
             // respecting the jerk factors, it may be possible, that applying separate safe exit / entry velocities will achieve faster prints.
             float vmax_junction_threshold = vmax_junction * 0.99f;
@@ -3161,6 +3189,14 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
             // Not coasting. The machine will stop and start the movements anyway, better to start the segment from start.
             if (prev.safe_feedrate > vmax_junction_threshold && curr.safe_feedrate > vmax_junction_threshold)
                 vmax_junction = curr.safe_feedrate;
+
+            // Apply same coasting logic to SCV-limited value
+            float vmax_junction_scv_threshold = vmax_junction_scv * 0.99f;
+            if (prev.safe_feedrate > vmax_junction_scv_threshold && curr.safe_feedrate > vmax_junction_scv_threshold)
+                vmax_junction_scv = curr.safe_feedrate;
+
+            // Store SCV-limited junction velocity for preview
+            block.scv_max_entry_speed = vmax_junction_scv;
         }
 
         float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, block.distance);
@@ -3595,6 +3631,34 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
             if (limited)
                 vmax_junction *= v_factor;
 
+            // Calculate SCV-limited junction velocity for Klipper preview (stored separately)
+            float vmax_junction_scv = vmax_junction;
+            if (is_klipper && block.has_xy_motion) {
+                auto has_xy_direction = [](const Vec3f& dir) {
+                    return std::abs(dir.x()) > 1e-5f || std::abs(dir.y()) > 1e-5f;
+                };
+                if (has_xy_direction(prev.exit_direction) && has_xy_direction(curr.enter_direction)) {
+                    Vec3f prev_xy = prev.exit_direction;
+                    prev_xy.z() = 0.0f;
+                    Vec3f curr_xy = curr.enter_direction;
+                    curr_xy.z() = 0.0f;
+                    float prev_norm = prev_xy.norm();
+                    float curr_norm = curr_xy.norm();
+                    if (prev_norm > 1e-5f && curr_norm > 1e-5f) {
+                        prev_xy /= prev_norm;
+                        curr_xy /= curr_norm;
+                        float dot = std::clamp(prev_xy.dot(curr_xy), -1.0f, 1.0f);
+                        float theta = std::acos(dot);
+                        float sin_half = std::max(std::sin(0.5f * theta), 1e-4f);
+                        float v_corner = current_scv(static_cast<PrintEstimatedStatistics::ETimeMode>(i)) / sin_half;
+                        if (v_corner < vmax_junction_scv) {
+                            vmax_junction_scv = v_corner;
+                            block.scv_limited = true;
+                        }
+                    }
+                }
+            }
+
             //BBS: Now the transition velocity is known, which maximizes the shared exit / entry velocity while
             // respecting the jerk factors, it may be possible, that applying separate safe exit / entry velocities will achieve faster prints.
             float vmax_junction_threshold = vmax_junction * 0.99f;
@@ -3602,6 +3666,14 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
             //BBS: Not coasting. The machine will stop and start the movements anyway, better to start the segment from start.
             if ((prev.safe_feedrate > vmax_junction_threshold) && (curr.safe_feedrate > vmax_junction_threshold))
                 vmax_junction = curr.safe_feedrate;
+
+            // Apply same coasting logic to SCV-limited value
+            float vmax_junction_scv_threshold = vmax_junction_scv * 0.99f;
+            if (prev.safe_feedrate > vmax_junction_scv_threshold && curr.safe_feedrate > vmax_junction_scv_threshold)
+                vmax_junction_scv = curr.safe_feedrate;
+
+            // Store SCV-limited junction velocity for preview
+            block.scv_max_entry_speed = vmax_junction_scv;
         }
 
         float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, block.distance);
@@ -5113,8 +5185,23 @@ void GCodeProcessor::record_block_kinematics(const TimeBlock& block, PrintEstima
     float decelerate_distance = std::max(0.0f, block.distance - block.trapezoid.decelerate_after);
     float cruise_distance = block.trapezoid.cruise_distance();
 
-    // For preview, recalculate kinematics with Klipper cruise ratio constraints.
-    // This is separate from time estimation which uses the original algorithm.
+    // For preview, apply Klipper-specific constraints that don't affect time estimation.
+    // First apply SCV-limited entry speed if applicable.
+    if (block.scv_limited && block.scv_max_entry_speed > 0.0f && block.scv_max_entry_speed < entry_speed) {
+        entry_speed = block.scv_max_entry_speed;
+        // Recalculate trapezoid with SCV-limited entry
+        accelerate_distance = std::max(0.0f, estimated_acceleration_distance(entry_speed, peak_speed, block.acceleration));
+        decelerate_distance = std::max(0.0f, estimated_acceleration_distance(peak_speed, exit_speed, -block.acceleration));
+        cruise_distance = block.distance - accelerate_distance - decelerate_distance;
+        if (cruise_distance < 0.0f) {
+            accelerate_distance = std::clamp(intersection_distance(entry_speed, exit_speed, block.acceleration, block.distance), 0.0f, block.distance);
+            cruise_distance = 0.0f;
+            peak_speed = speed_from_distance(entry_speed, accelerate_distance, block.acceleration);
+            decelerate_distance = block.distance - accelerate_distance;
+        }
+    }
+
+    // Then apply cruise ratio limiting on top of SCV.
     bool cruise_ratio_applied = false;
     if (block.has_cruise_ratio() && block.acceleration > 0.0f && block.distance > 0.0f) {
         const float allowed = std::max(0.0f, (1.0f - block.cruise_ratio) * block.distance);
