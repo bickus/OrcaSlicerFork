@@ -325,7 +325,7 @@ TEST_CASE("Klipper time estimation - junction velocity", "[KlipperEstimator]") {
     float junction_v = moves[0].kinematics.exit_speed;
 
     // Junction velocity should be reduced for 90° corner
-    // SCV of 5mm/s at 90° → ~7 mm/s junction
+    // Jerk (used as SCV) of 5mm/s at 90° → ~7 mm/s junction
     REQUIRE(junction_v < 50.0f);  // Much less than cruise
     REQUIRE(junction_v > 1.0f);   // But not zero
 }

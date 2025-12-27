@@ -104,13 +104,33 @@ The following table compares the NEW Klipper algorithm with the EXISTING Legacy 
 | Aspect | Legacy Mode (Marlin/RRF/etc.) | Klipper Mode (Klipper only) |
 |--------|-------------------------------|----------------------------|
 | Junction velocity | Jerk-based (current code) | Junction deviation + centripetal |
-| Corner speed | Uses `machine_max_jerk_*` | Uses `square_corner_velocity` |
+| Corner speed | Uses `machine_max_jerk_*` | Uses `machine_max_jerk_*` as SCV (see note below) |
 | Velocity planning | Basic forward/reverse pass | Full two-pass with smoothing |
 | Lookahead | Current implementation | Velocity constraint propagation |
 | Cruise ratio | Current behavior | Enforces minimum cruise distance |
 | Axis limits | Current implementation | Full per-axis velocity/accel limits |
 | Extruder limits | Current implementation | Proper instantaneous corner velocity |
 | **Code path** | **EXISTING (unchanged)** | **NEW (additive)** |
+
+---
+
+## IMPORTANT: Jerk Parameters = Square Corner Velocity for Klipper
+
+**OrcaSlicer does NOT have a separate "Square Corner Velocity" (SCV) parameter.**
+
+For Klipper printers, the existing **jerk parameters** (`machine_max_jerk_x`, `machine_max_jerk_y`) serve as the Square Corner Velocity:
+
+| OrcaSlicer Parameter | Klipper Meaning | Notes |
+|---------------------|-----------------|-------|
+| `machine_max_jerk_x` | Square Corner Velocity (X component) | Used as SCV for Klipper |
+| `machine_max_jerk_y` | Square Corner Velocity (Y component) | Used as SCV for Klipper |
+| `machine_max_jerk_e` | Instantaneous Corner Velocity | For extruder junction limiting |
+
+**Throughout this design document, when "SCV" is mentioned, it refers to the value read from `machine_max_jerk_x/y` - NOT a separate parameter.**
+
+The `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=` G-code command can override this at runtime, but the default comes from the jerk settings.
+
+---
 
 ## Implementation Phases
 
@@ -147,32 +167,35 @@ The following table compares the NEW Klipper algorithm with the EXISTING Legacy 
 
 ### Existing Parameters (Already in OrcaSlicer)
 
-| OrcaSlicer Parameter | Maps to Klipper | Location |
-|---------------------|-----------------|----------|
-| `machine_max_jerk_x/y/z/e` | `square_corner_velocity` (for XY) | Printer profile |
+| OrcaSlicer Parameter | Klipper Equivalent | Notes |
+|---------------------|-------------------|-------|
+| `machine_max_jerk_x` | `square_corner_velocity` | **Jerk IS SCV for Klipper** |
+| `machine_max_jerk_y` | `square_corner_velocity` | Use min(jerk_x, jerk_y) as SCV |
+| `machine_max_jerk_e` | `instantaneous_corner_velocity` | For extruder junction limiting |
 | `machine_max_speed_x/y/z/e` | `max_velocity` per axis | Printer profile |
 | `machine_max_acceleration_x/y/z/e` | `max_acceleration` per axis | Printer profile |
 | `machine_max_acceleration_extruding` | Feature-specific accel | Printer profile |
-| `klipper_cruise_ratio` | `minimum_cruise_ratio` | Printer profile (added by klipper_actual_speed) |
+| `klipper_cruise_ratio` | `minimum_cruise_ratio` | Already exists (from klipper_actual_speed) |
 
-### Values from G-code (Runtime)
+### Values from G-code (Runtime Override)
 
-| G-code Command | Parameter | Current Handling |
-|----------------|-----------|------------------|
+| G-code Command | Parameter | Handling |
+|----------------|-----------|----------|
 | `SET_VELOCITY_LIMIT VELOCITY=` | Max velocity | Parsed, used |
 | `SET_VELOCITY_LIMIT ACCEL=` | Max acceleration | Parsed, used |
-| `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=` | SCV | Parsed, stored (viz only) |
-| `SET_VELOCITY_LIMIT MINIMUM_CRUISE_RATIO=` | Cruise ratio | Parsed, stored (viz only) |
+| `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=` | Overrides jerk-as-SCV | Parsed, will be used for time est |
+| `SET_VELOCITY_LIMIT MINIMUM_CRUISE_RATIO=` | Cruise ratio | Parsed, will be used for time est |
 | `M204 S`/`P`/`T` | Acceleration | Parsed, used |
 
-### Parameters NOT Needed (Derivable)
+### Derived Parameters (No New Config Needed)
 
-| Parameter | How to Derive |
-|-----------|--------------|
-| `junction_deviation` | Calculated: `scv² × 0.414 / max_acceleration` |
-| `instant_corner_velocity` | Use extruder jerk value from profile |
-| `accel_to_decel` | Use: `max_acceleration × (1 - cruise_ratio)` |
-| Per-feature SCV | Use per-feature jerk values already in profile |
+| Derived Value | Source | Formula |
+|--------------|--------|---------|
+| SCV (Square Corner Velocity) | `min(machine_max_jerk_x, machine_max_jerk_y)` | Direct read from jerk |
+| `junction_deviation` | SCV + max_accel | `jerk² × 0.414 / max_acceleration` |
+| `instant_corner_velocity` | `machine_max_jerk_e` | Direct read from extruder jerk |
+| `accel_to_decel` | cruise_ratio + max_accel | `max_acceleration × (1 - cruise_ratio)` |
+| Per-feature SCV | Per-feature jerk values | Already in profile for each feature |
 
 ## Success Criteria
 

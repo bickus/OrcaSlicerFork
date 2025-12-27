@@ -38,7 +38,7 @@ Establish the infrastructure for Klipper-compatible time estimation without chan
    - `float resolved_start_v`, `resolved_cruise_v`, `resolved_end_v`
 
 4. **Implement derived parameter calculations**
-   - `compute_junction_deviation(scv, max_accel)`
+   - `compute_junction_deviation(jerk_as_scv, max_accel)` - jerk params = SCV
    - `compute_accel_to_decel(max_accel, cruise_ratio)`
 
 5. **Add feature-flag guards**

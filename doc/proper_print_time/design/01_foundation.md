@@ -133,14 +133,31 @@ void TimeBlock::init_klipper_fields(float velocity, float accel, float accel_to_
 
 Instead of adding new printer profile options, derive all needed values from existing parameters.
 
-**Junction Deviation** (derived from SCV):
+---
+
+#### IMPORTANT: Jerk Parameters = Square Corner Velocity
+
+**OrcaSlicer does NOT have a separate SCV parameter.** For Klipper printers:
+
+| What We Need | OrcaSlicer Source | How to Get It |
+|-------------|-------------------|---------------|
+| Square Corner Velocity (SCV) | `machine_max_jerk_x`, `machine_max_jerk_y` | `min(jerk_x, jerk_y)` |
+| Instantaneous Corner Velocity | `machine_max_jerk_e` | Direct read |
+
+**When this document says "SCV", it means the value read from jerk parameters.**
+
+---
+
+**Junction Deviation** (derived from jerk-as-SCV):
 
 ```cpp
 // In TimeMachine or as a helper function
-float compute_junction_deviation(float scv, float max_accel) {
+// NOTE: 'scv' parameter is actually read from machine_max_jerk_x/y
+float compute_junction_deviation(float scv_from_jerk, float max_accel) {
     // junction_deviation = scv² × (√2 - 1) / max_acceleration
+    // where scv = min(machine_max_jerk_x, machine_max_jerk_y)
     static constexpr float SQRT2_MINUS_1 = 0.41421356f;
-    return (scv * scv * SQRT2_MINUS_1) / max_accel;
+    return (scv_from_jerk * scv_from_jerk * SQRT2_MINUS_1) / max_accel;
 }
 ```
 
@@ -154,10 +171,10 @@ float compute_accel_to_decel(float max_accel, float cruise_ratio) {
 }
 ```
 
-**Instant Corner Velocity** (use extruder jerk):
+**Instant Corner Velocity** (from extruder jerk):
 
 ```cpp
-// Use machine_max_jerk_e as instant_corner_velocity
+// Klipper's instant_corner_velocity = OrcaSlicer's machine_max_jerk_e
 float instant_corner_velocity = machine_limits.machine_max_jerk_e.values[mode];
 ```
 
@@ -169,8 +186,12 @@ if (m_flavor == gcfKlipper) {
         auto& machine = m_time_processor.machines[i];
         auto& limits = m_time_processor.machine_limits;
 
-        // Get SCV from jerk setting (Klipper uses jerk field for SCV)
-        float scv = std::min(
+        // =====================================================
+        // JERK = SCV for Klipper!
+        // OrcaSlicer has no separate SCV parameter.
+        // For Klipper, jerk_x/jerk_y ARE the Square Corner Velocity.
+        // =====================================================
+        float scv_from_jerk = std::min(
             limits.machine_max_jerk_x.values[i],
             limits.machine_max_jerk_y.values[i]
         );
@@ -178,11 +199,12 @@ if (m_flavor == gcfKlipper) {
         // Get max acceleration (use extruding accel as default)
         float max_accel = limits.machine_max_acceleration_extruding.values[i];
 
-        // Derive Klipper parameters
-        machine.klipper_state.junction_deviation = compute_junction_deviation(scv, max_accel);
+        // Derive Klipper parameters from existing config
+        machine.klipper_state.junction_deviation = compute_junction_deviation(scv_from_jerk, max_accel);
         machine.klipper_state.accel_to_decel = compute_accel_to_decel(
             max_accel, machine.minimum_cruise_ratio
         );
+        // Extruder jerk = instant corner velocity for Klipper
         machine.klipper_state.instant_corner_velocity = limits.machine_max_jerk_e.values[i];
     }
 }

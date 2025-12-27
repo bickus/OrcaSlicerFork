@@ -4,18 +4,32 @@ This document records all assumptions made during the design of the Klipper-comp
 
 ---
 
-## Parameter Assumptions
+## Parameter Assumptions (CRITICAL)
 
-### A1: SCV from Jerk Parameters
+---
 
-**Assumption**: For Klipper printers, `machine_max_jerk_x` and `machine_max_jerk_y` represent `square_corner_velocity`, not traditional jerk.
+### A1: Jerk Parameters ARE Square Corner Velocity for Klipper
+
+**CRITICAL: OrcaSlicer does NOT have a separate "Square Corner Velocity" parameter.**
+
+**Assumption**: For Klipper printers, the jerk parameters serve as Square Corner Velocity:
+
+| OrcaSlicer Parameter | Used As (Klipper) |
+|---------------------|-------------------|
+| `machine_max_jerk_x` | Square Corner Velocity (X component) |
+| `machine_max_jerk_y` | Square Corner Velocity (Y component) |
+| `machine_max_jerk_e` | Instantaneous Corner Velocity (extruder) |
+
+**How to get SCV**: `scv = min(machine_max_jerk_x, machine_max_jerk_y)`
 
 **Rationale**: OrcaSlicer's existing klipper_actual_speed feature already uses this mapping. The Klipper documentation and codebase confirm that the "jerk" setting in Klipper profiles corresponds to SCV.
 
 **Source**: `doc/klipper_actual_speed/design/02_motion_model.md`
 > "Orca don't have parameters named Square Corner Velocity, however for Klipper machines parameters specified in Jerk are used as Square Corner Velocity"
 
-**Impact**: No new UI parameters needed for SCV.
+**Runtime Override**: The `SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=` G-code command can override the jerk-derived SCV at runtime. The implementation should update the internal SCV value when this command is parsed.
+
+**Impact**: No new UI parameters needed. The existing jerk settings are used directly.
 
 ---
 
@@ -29,11 +43,13 @@ This document records all assumptions made during the design of the Klipper-comp
 
 ---
 
-### A3: Junction Deviation is Derived, Not Configured
+### A3: Junction Deviation is Derived from Jerk (as SCV)
 
-**Assumption**: Junction deviation is calculated from SCV and max acceleration rather than being a separate configuration parameter.
+**Assumption**: Junction deviation is calculated from jerk-as-SCV and max acceleration rather than being a separate configuration parameter.
 
-**Formula**: `junction_deviation = scv² × 0.41421356 / max_acceleration`
+**Formula**: `junction_deviation = jerk² × 0.41421356 / max_acceleration`
+
+Where `jerk = min(machine_max_jerk_x, machine_max_jerk_y)`.
 
 **Rationale**:
 1. Reduces configuration complexity

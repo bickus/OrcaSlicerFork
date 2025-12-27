@@ -4,12 +4,28 @@
 
 This phase implements the Klipper junction velocity algorithm, which determines the maximum speed at which the toolhead can transition between two consecutive moves. This is fundamentally different from Marlin's jerk-based approach.
 
+---
+
+### Terminology: SCV = Jerk Parameters
+
+**OrcaSlicer does NOT have a separate "Square Corner Velocity" (SCV) parameter.**
+
+Throughout this document, when "SCV" is mentioned, it refers to:
+- **`min(machine_max_jerk_x, machine_max_jerk_y)`** from the printer profile
+
+When "instant corner velocity" is mentioned, it refers to:
+- **`machine_max_jerk_e`** from the printer profile
+
+These values are already configured in Klipper printer profiles as jerk settings.
+
+---
+
 ## Goals
 
 1. Calculate junction angle between consecutive moves
-2. Implement junction deviation velocity formula
+2. Implement junction deviation velocity formula (uses jerk-as-SCV)
 3. Implement centripetal velocity constraint
-4. Implement extruder junction speed limiting
+4. Implement extruder junction speed limiting (uses extruder jerk)
 5. Combine all constraints into `max_start_v2`
 
 ---
@@ -61,13 +77,16 @@ bool are_moves_colinear(float cos_theta) {
 
 **Mathematical Background**:
 ```
-junction_deviation = scv² × (√2 - 1) / max_acceleration
+# SCV = min(machine_max_jerk_x, machine_max_jerk_y) - read from jerk params!
+junction_deviation = jerk² × (√2 - 1) / max_acceleration
 
 sin(θ/2) = √(0.5 × (1 - cos_θ))
 r = sin(θ/2) / (1 - sin(θ/2))
 
 junction_v² = r × junction_deviation × acceleration
 ```
+
+Note: The `scv` value passed to `compute_junction_deviation()` comes from `min(machine_max_jerk_x, machine_max_jerk_y)`. See Phase 1 for the parameter reading code.
 
 **Implementation**:
 
