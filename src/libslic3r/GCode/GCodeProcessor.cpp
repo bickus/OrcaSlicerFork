@@ -346,6 +346,194 @@ void calculate_klipper_junction(
 }
 
 // ============================================================================
+// Move Checkers - Axis and Extruder Limiters (Deliverable 5)
+// ============================================================================
+
+// Limit velocity based on per-axis maximum velocities
+// rate_xyz: unit direction vector
+// requested_velocity: the requested velocity for this move
+// max_vel_x/y/z: per-axis velocity limits
+// Returns: maximum allowed velocity for this move direction
+float limit_velocity_by_axis(
+    const Vec3f& rate_xyz,
+    float requested_velocity,
+    float max_vel_x,
+    float max_vel_y,
+    float max_vel_z)
+{
+    float max_velocity = requested_velocity;
+
+    // For each axis, if the move has motion on that axis,
+    // limit velocity so the axis component doesn't exceed max
+
+    // X axis: if rate_xyz.x != 0, then v * |rate_xyz.x| <= max_vel_x
+    // So v <= max_vel_x / |rate_xyz.x|
+    if (std::abs(rate_xyz.x()) > 0.0001f) {
+        float axis_limit = max_vel_x / std::abs(rate_xyz.x());
+        max_velocity = std::min(max_velocity, axis_limit);
+    }
+
+    // Y axis
+    if (std::abs(rate_xyz.y()) > 0.0001f) {
+        float axis_limit = max_vel_y / std::abs(rate_xyz.y());
+        max_velocity = std::min(max_velocity, axis_limit);
+    }
+
+    // Z axis
+    if (std::abs(rate_xyz.z()) > 0.0001f) {
+        float axis_limit = max_vel_z / std::abs(rate_xyz.z());
+        max_velocity = std::min(max_velocity, axis_limit);
+    }
+
+    return max_velocity;
+}
+
+// Limit acceleration based on per-axis maximum accelerations
+// rate_xyz: unit direction vector
+// requested_accel: the requested acceleration for this move
+// max_accel_x/y/z: per-axis acceleration limits
+// Returns: maximum allowed acceleration for this move direction
+float limit_acceleration_by_axis(
+    const Vec3f& rate_xyz,
+    float requested_accel,
+    float max_accel_x,
+    float max_accel_y,
+    float max_accel_z)
+{
+    float max_accel = requested_accel;
+
+    // Same logic as velocity: axis component can't exceed axis limit
+
+    if (std::abs(rate_xyz.x()) > 0.0001f) {
+        float axis_limit = max_accel_x / std::abs(rate_xyz.x());
+        max_accel = std::min(max_accel, axis_limit);
+    }
+
+    if (std::abs(rate_xyz.y()) > 0.0001f) {
+        float axis_limit = max_accel_y / std::abs(rate_xyz.y());
+        max_accel = std::min(max_accel, axis_limit);
+    }
+
+    if (std::abs(rate_xyz.z()) > 0.0001f) {
+        float axis_limit = max_accel_z / std::abs(rate_xyz.z());
+        max_accel = std::min(max_accel, axis_limit);
+    }
+
+    return max_accel;
+}
+
+// Limit velocity based on extruder maximum velocity
+// rate_e: extruder rate relative to XYZ distance
+// requested_velocity: the requested velocity
+// max_extruder_velocity: maximum extruder velocity
+// Returns: maximum allowed velocity
+float limit_velocity_by_extruder(
+    float rate_e,
+    float requested_velocity,
+    float max_extruder_velocity)
+{
+    if (std::abs(rate_e) < 0.0001f) {
+        return requested_velocity;  // No extrusion, no limit
+    }
+
+    // Extrusion rate = velocity * rate_e
+    // Limit: velocity * |rate_e| <= max_extruder_velocity
+    float max_velocity = max_extruder_velocity / std::abs(rate_e);
+    return std::min(requested_velocity, max_velocity);
+}
+
+// Limit acceleration based on extruder maximum acceleration
+// rate_e: extruder rate relative to XYZ distance
+// requested_accel: the requested acceleration
+// max_extruder_accel: maximum extruder acceleration
+// Returns: maximum allowed acceleration
+float limit_acceleration_by_extruder(
+    float rate_e,
+    float requested_accel,
+    float max_extruder_accel)
+{
+    if (std::abs(rate_e) < 0.0001f) {
+        return requested_accel;  // No extrusion, no limit
+    }
+
+    float max_accel = max_extruder_accel / std::abs(rate_e);
+    return std::min(requested_accel, max_accel);
+}
+
+// Get acceleration for a specific print feature
+// This maps ExtrusionRole to the appropriate acceleration setting from machine limits
+// machine_limits: reference to the machine limits configuration
+// mode_idx: time mode index (usually 0 for normal mode)
+// role: extrusion role (perimeter, infill, travel, etc.)
+// default_accel: fallback acceleration if no feature-specific value is set
+// Returns: feature-specific acceleration, or default_accel if not set
+float get_feature_acceleration(
+    const GCodeProcessor::MachineEnvelopeConfig& machine_limits,
+    size_t mode_idx,
+    ExtrusionRole role,
+    float default_accel)
+{
+    // Helper to safely get config value
+    auto get_accel = [&](const auto& config_option) -> float {
+        if (config_option.values.size() > mode_idx && config_option.values[mode_idx] > 0) {
+            return static_cast<float>(config_option.values[mode_idx]);
+        }
+        return 0.0f;
+    };
+
+    // Map extrusion roles to their acceleration settings
+    switch (role) {
+        case erPerimeter:
+        case erExternalPerimeter:
+            // Use outer wall acceleration if available
+            {
+                float accel = get_accel(machine_limits.machine_max_acceleration_outer_wall);
+                if (accel > 0.0f) return accel;
+            }
+            break;
+
+        case erInternalInfill:
+        case erSolidInfill:
+        case erTopSolidInfill:
+        case erBottomSurface:
+            // Use infill acceleration if available
+            {
+                float accel = get_accel(machine_limits.machine_max_acceleration_infill);
+                if (accel > 0.0f) return accel;
+            }
+            break;
+
+        case erBridgeInfill:
+            // Use bridge acceleration if available
+            {
+                float accel = get_accel(machine_limits.machine_max_acceleration_bridge);
+                if (accel > 0.0f) return accel;
+            }
+            break;
+
+        case erSupportMaterial:
+        case erSupportMaterialInterface:
+            // Use support acceleration if available
+            // Note: Most profiles don't have separate support accel
+            break;
+
+        case erTravel:
+            // Use travel acceleration if available
+            {
+                float accel = get_accel(machine_limits.machine_max_acceleration_travel);
+                if (accel > 0.0f) return accel;
+            }
+            break;
+
+        default:
+            break;
+    }
+
+    // Fall back to default acceleration
+    return default_accel;
+}
+
+// ============================================================================
 // Two-Pass Velocity Planner (Deliverable 4)
 // ============================================================================
 
@@ -3802,6 +3990,75 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
             // max_dv2 = 2 * acceleration * distance (for kinematic equation v² = 2*a*d)
             block.klipper.max_dv2 = 2.0f * block.acceleration * block.distance;
 
+            // Apply move checkers: axis and extruder limits
+            // These modify velocity and acceleration before junction calculation
+            {
+                // Get machine limits from config
+                const auto& limits = m_time_processor.machine_limits;
+                size_t mode_idx = static_cast<size_t>(i);
+
+                // Get per-axis limits
+                float max_vel_x = (limits.machine_max_speed_x.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_speed_x.values[mode_idx]) : feedrate_mms;
+                float max_vel_y = (limits.machine_max_speed_y.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_speed_y.values[mode_idx]) : feedrate_mms;
+                float max_vel_z = (limits.machine_max_speed_z.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_speed_z.values[mode_idx]) : feedrate_mms;
+                float max_vel_e = (limits.machine_max_speed_e.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_speed_e.values[mode_idx]) : feedrate_mms;
+
+                float max_accel_x = (limits.machine_max_acceleration_x.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_acceleration_x.values[mode_idx]) : block.acceleration;
+                float max_accel_y = (limits.machine_max_acceleration_y.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_acceleration_y.values[mode_idx]) : block.acceleration;
+                float max_accel_z = (limits.machine_max_acceleration_z.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_acceleration_z.values[mode_idx]) : block.acceleration;
+                float max_accel_e = (limits.machine_max_acceleration_e.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_acceleration_e.values[mode_idx]) : block.acceleration;
+
+                // Apply axis velocity limits
+                float limited_velocity = limit_velocity_by_axis(
+                    block.klipper.rate_xyz,
+                    feedrate_mms,
+                    max_vel_x, max_vel_y, max_vel_z);
+
+                // Apply extruder velocity limit
+                limited_velocity = limit_velocity_by_extruder(
+                    block.klipper.rate_e,
+                    limited_velocity,
+                    max_vel_e);
+
+                // Update max cruise velocity squared with limited velocity
+                block.klipper.max_cruise_v2 = limited_velocity * limited_velocity;
+
+                // Get feature-specific acceleration
+                float feature_accel = get_feature_acceleration(
+                    limits,
+                    mode_idx,
+                    block.role,
+                    block.acceleration);
+
+                // Apply axis acceleration limits
+                float limited_accel = limit_acceleration_by_axis(
+                    block.klipper.rate_xyz,
+                    feature_accel,
+                    max_accel_x, max_accel_y, max_accel_z);
+
+                // Apply extruder acceleration limit
+                limited_accel = limit_acceleration_by_extruder(
+                    block.klipper.rate_e,
+                    limited_accel,
+                    max_accel_e);
+
+                // Update block acceleration and recalculate max_dv2
+                block.acceleration = limited_accel;
+                block.klipper.max_dv2 = 2.0f * limited_accel * block.distance;
+
+                // Compute smoothed_dv2 using accel_to_decel
+                block.klipper.smoothed_dv2 = 2.0f *
+                    machine.klipper_state.accel_to_decel * block.distance;
+            }
+
             // Get previous block for junction calculation
             const TimeBlock* prev_block = nullptr;
             if (!machine.blocks.empty()) {
@@ -4318,6 +4575,75 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
             // Set max_dv2 based on acceleration
             // max_dv2 = 2 * acceleration * distance (for kinematic equation v² = 2*a*d)
             block.klipper.max_dv2 = 2.0f * block.acceleration * block.distance;
+
+            // Apply move checkers: axis and extruder limits
+            // These modify velocity and acceleration before junction calculation
+            {
+                // Get machine limits from config
+                const auto& limits = m_time_processor.machine_limits;
+                size_t mode_idx = static_cast<size_t>(i);
+
+                // Get per-axis limits
+                float max_vel_x = (limits.machine_max_speed_x.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_speed_x.values[mode_idx]) : feedrate_mms;
+                float max_vel_y = (limits.machine_max_speed_y.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_speed_y.values[mode_idx]) : feedrate_mms;
+                float max_vel_z = (limits.machine_max_speed_z.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_speed_z.values[mode_idx]) : feedrate_mms;
+                float max_vel_e = (limits.machine_max_speed_e.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_speed_e.values[mode_idx]) : feedrate_mms;
+
+                float max_accel_x = (limits.machine_max_acceleration_x.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_acceleration_x.values[mode_idx]) : block.acceleration;
+                float max_accel_y = (limits.machine_max_acceleration_y.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_acceleration_y.values[mode_idx]) : block.acceleration;
+                float max_accel_z = (limits.machine_max_acceleration_z.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_acceleration_z.values[mode_idx]) : block.acceleration;
+                float max_accel_e = (limits.machine_max_acceleration_e.values.size() > mode_idx) ?
+                    static_cast<float>(limits.machine_max_acceleration_e.values[mode_idx]) : block.acceleration;
+
+                // Apply axis velocity limits
+                float limited_velocity = limit_velocity_by_axis(
+                    block.klipper.rate_xyz,
+                    feedrate_mms,
+                    max_vel_x, max_vel_y, max_vel_z);
+
+                // Apply extruder velocity limit
+                limited_velocity = limit_velocity_by_extruder(
+                    block.klipper.rate_e,
+                    limited_velocity,
+                    max_vel_e);
+
+                // Update max cruise velocity squared with limited velocity
+                block.klipper.max_cruise_v2 = limited_velocity * limited_velocity;
+
+                // Get feature-specific acceleration
+                float feature_accel = get_feature_acceleration(
+                    limits,
+                    mode_idx,
+                    block.role,
+                    block.acceleration);
+
+                // Apply axis acceleration limits
+                float limited_accel = limit_acceleration_by_axis(
+                    block.klipper.rate_xyz,
+                    feature_accel,
+                    max_accel_x, max_accel_y, max_accel_z);
+
+                // Apply extruder acceleration limit
+                limited_accel = limit_acceleration_by_extruder(
+                    block.klipper.rate_e,
+                    limited_accel,
+                    max_accel_e);
+
+                // Update block acceleration and recalculate max_dv2
+                block.acceleration = limited_accel;
+                block.klipper.max_dv2 = 2.0f * limited_accel * block.distance;
+
+                // Compute smoothed_dv2 using accel_to_decel
+                block.klipper.smoothed_dv2 = 2.0f *
+                    machine.klipper_state.accel_to_decel * block.distance;
+            }
 
             // Get previous block for junction calculation
             const TimeBlock* prev_block = nullptr;
