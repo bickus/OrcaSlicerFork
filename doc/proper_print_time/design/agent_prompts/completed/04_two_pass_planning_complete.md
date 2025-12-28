@@ -728,6 +728,137 @@ The two-pass planner is now complete and functional. Future deliverables should 
 2. Full delayed move logic for streaming
 3. Arc segment-by-segment processing (if needed)
 
+## Post-Delivery Bug Fixes
+
+After initial delivery, testing revealed several critical bugs that resulted in significantly inflated time estimates (+30% or more instead of the expected 5-25% decrease). The following fixes were applied:
+
+### Fix 1: Batch Velocity Continuity (Commit 43d565d865)
+
+**Problem:** The forward pass was resetting to zero velocity at the start of each batch, causing every batch to start from rest.
+
+**Impact:** Massive time inflation as blocks were processed incrementally. Each batch forced unnecessary deceleration to zero and re-acceleration.
+
+**Fix Applied:**
+- Added `klipper_prev_batch_end_v` field to `TimeMachine` struct (GCodeProcessor.hpp:579)
+- Modified `klipper_forward_pass()` to accept `initial_velocity` parameter (GCodeProcessor.cpp:409)
+- Updated `calculate_time_klipper()` to:
+  - Pass previous batch end velocity to forward pass (line 949)
+  - Save current batch end velocity for next batch (lines 1000-1003)
+- Initialize field to 0.0f in `reset()` (line 783)
+
+**Code Changes:**
+```cpp
+// GCodeProcessor.hpp line 579
+float klipper_prev_batch_end_v{0.0f};  // Track velocity between batches
+
+// GCodeProcessor.cpp line 409
+void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float initial_velocity = 0.0f)
+{
+    if (blocks.empty()) return;
+    float prev_end_v2 = initial_velocity * initial_velocity;  // Start with batch initial velocity
+    // ... rest of function
+}
+
+// GCodeProcessor.cpp lines 1000-1003
+// Save end velocity of last processed block for next batch
+if (n_blocks_process > 0) {
+    klipper_prev_batch_end_v = blocks[n_blocks_process - 1].klipper.resolved_end_v;
+}
+```
+
+### Fix 2: Direct Junction Deviation from Profile (Commit 01e9f036aa)
+
+**Problem:** The code always computed `junction_deviation` from jerk/SCV values, ignoring the `machine_max_junction_deviation` config option if set in the printer profile.
+
+**Impact:** Minor - most profiles don't have this set, but it's more accurate when available.
+
+**Fix Applied:**
+- Check if `machine_max_junction_deviation` is set in profile (line 1437-1438)
+- Use it directly if available (value >= 0.0001)
+- Fall back to computing from jerk/SCV if not set (lines 1441-1448)
+
+**Code Changes:**
+```cpp
+// GCodeProcessor.cpp lines 1436-1448
+// Check if junction_deviation is set directly in profile
+float junction_deviation = static_cast<float>(get_option_value(
+    m_time_processor.machine_limits.machine_max_junction_deviation, i));
+
+// If not set (0 or very small), compute from jerk/SCV values
+if (junction_deviation < 0.0001f) {
+    float scv = std::min(
+        static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_x, i)),
+        static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_y, i))
+    );
+    junction_deviation = compute_junction_deviation(scv, max_acceleration);
+}
+```
+
+### Fix 3: Backward Pass Cruise Velocity Reduction (Commit a453d51d89) **CRITICAL**
+
+**Problem:** The backward pass was **incorrectly reducing `max_cruise_v2`** based on start velocity constraints. This created a cascading slowdown effect where each block's cruise velocity was capped by the previous block's limited start velocity.
+
+**Impact:** Catastrophic - caused 50%+ time estimate increases. With aggressive printer settings (100,000 mm/s² acceleration), this created exponential slowdown through the print.
+
+**Incorrect Logic (REMOVED):**
+```cpp
+// WRONG - line 397-398 (removed)
+float max_cruise_v2 = new_start_v2 + block.klipper.max_dv2;
+block.klipper.max_cruise_v2 = std::min(block.klipper.max_cruise_v2, max_cruise_v2);
+```
+
+**Why This Was Wrong:**
+1. `max_cruise_v2` is set from feedrate in `process_G1()`/`process_G2_G3()` (lines 3521, 4036)
+2. It represents the maximum speed the user requested for that move
+3. The backward pass should ONLY update `max_start_v2` (junction entry velocity)
+4. Reducing `max_cruise_v2` artificially limits the block's speed for no valid reason
+5. This creates cascading effects: Block A's reduced cruise → Block B's start limited → Block B's cruise reduced → Block C even slower → etc.
+
+**Fix Applied:**
+- **Removed lines 397-398** that reduced `max_cruise_v2`
+- Added comment explaining why we do NOT touch `max_cruise_v2` (lines 396-397)
+- The backward pass now correctly ONLY updates `max_start_v2`
+
+**Code After Fix:**
+```cpp
+// GCodeProcessor.cpp lines 392-397
+// Start velocity is minimum of junction limit and kinematic limit
+float new_start_v2 = std::min(block.klipper.max_start_v2, max_start_from_end);
+block.klipper.max_start_v2 = new_start_v2;
+
+// NOTE: Do NOT reduce max_cruise_v2 here! It's set from feedrate and should not change.
+// The backward pass only updates max_start_v2 based on deceleration constraints.
+```
+
+**Expected Results After All Fixes:**
+
+With high-performance printers (acceleration 20,000-100,000 mm/s²):
+- **Legacy estimate:** 7h15m (too conservative)
+- **Klipper estimate:** 5h30m - 6h30m (5-25% faster than legacy)
+- **Actual print time:** ~6h15m
+- **Accuracy:** Klipper should be within 5-10% of actual
+
+The fixes transform the algorithm from producing wildly incorrect estimates (+50% too slow) to producing accurate estimates that match or slightly underestimate actual print times (as intended).
+
+### Files Modified by Bug Fixes
+
+**GCodeProcessor.hpp:**
+- Line 579: Added `klipper_prev_batch_end_v` field
+
+**GCodeProcessor.cpp:**
+- Line 409: Modified `klipper_forward_pass()` signature
+- Line 413: Changed initial `prev_end_v2` from 0.0f to `initial_velocity * initial_velocity`
+- Lines 396-397: Removed incorrect `max_cruise_v2` reduction, added explanatory comment
+- Line 783: Initialize `klipper_prev_batch_end_v` in `reset()`
+- Line 949: Pass `klipper_prev_batch_end_v` to forward pass
+- Lines 1000-1003: Save batch end velocity
+- Lines 1436-1448: Prefer direct junction_deviation from profile
+
+### Commits
+- `43d565d865` - Fix: Maintain velocity continuity between batches in Klipper planner
+- `01e9f036aa` - Fix: Prefer direct junction_deviation from printer profile
+- `a453d51d89` - Fix: Do not reduce max_cruise_v2 in backward pass
+
 ## Conclusion
 
 Deliverable 4 successfully implements the Klipper two-pass velocity planning algorithm. The implementation:
