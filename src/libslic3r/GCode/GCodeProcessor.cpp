@@ -119,6 +119,72 @@ float compute_accel_to_decel(float max_accel, float cruise_ratio = 0.5f) {
     return max_accel * (1.0f - cruise_ratio);
 }
 
+// Calculate rate vector for a move
+// start, end: 4D vectors (X, Y, Z, E)
+// Returns: rate_xyz (unit vector) and rate_e (signed scalar)
+void calculate_rate_vector(
+    const Vec4d& start,
+    const Vec4d& end,
+    Vec3f& rate_xyz,
+    float& rate_e,
+    bool& is_kinematic,
+    bool& has_xy_motion)
+{
+    Vec3d delta_xyz(end.x() - start.x(), end.y() - start.y(), end.z() - start.z());
+    double delta_e = end.w() - start.w();  // w() is the 4th component (E)
+
+    double xyz_length = delta_xyz.norm();
+    double total_length = std::sqrt(xyz_length * xyz_length + delta_e * delta_e);
+
+    // Determine move type
+    double xy_length = std::sqrt(delta_xyz.x() * delta_xyz.x() +
+                                  delta_xyz.y() * delta_xyz.y());
+    has_xy_motion = xy_length > 0.0001;  // 0.1 micron threshold
+    is_kinematic = has_xy_motion || std::abs(delta_xyz.z()) > 0.0001;
+
+    if (total_length < 0.0001) {
+        // Zero-length move
+        rate_xyz = Vec3f::Zero();
+        rate_e = 0.0f;
+        is_kinematic = false;
+        has_xy_motion = false;
+        return;
+    }
+
+    if (xyz_length > 0.0001) {
+        // Normalize XYZ component
+        rate_xyz = (delta_xyz / xyz_length).cast<float>();
+    } else {
+        // Pure E move
+        rate_xyz = Vec3f::Zero();
+    }
+
+    // E rate relative to XYZ distance (for kinematic moves)
+    // or relative to E distance (for E-only moves)
+    if (is_kinematic && xyz_length > 0.0001) {
+        rate_e = static_cast<float>(delta_e / xyz_length);
+    } else {
+        rate_e = (delta_e > 0) ? 1.0f : (delta_e < 0) ? -1.0f : 0.0f;
+    }
+}
+
+// Initialize Klipper fields for a TimeBlock
+void init_klipper_fields(GCodeProcessor::TimeBlock& block) {
+    block.klipper.rate_xyz = Vec3f::Zero();
+    block.klipper.rate_e = 0.0f;
+    block.klipper.max_cruise_v2 = 0.0f;
+    block.klipper.max_dv2 = 0.0f;
+    block.klipper.smoothed_dv2 = 0.0f;
+    block.klipper.max_start_v2 = 0.0f;
+    block.klipper.max_smoothed_v2 = 0.0f;
+    block.klipper.junction_deviation = 0.0f;
+    block.klipper.is_kinematic = true;
+    block.klipper.has_xy_motion = true;
+    block.klipper.resolved_start_v = 0.0f;
+    block.klipper.resolved_cruise_v = 0.0f;
+    block.klipper.resolved_end_v = 0.0f;
+}
+
 } // namespace
 
 static constexpr double kPI = 3.14159265358979323846;
@@ -3272,6 +3338,26 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
         block.flags.recalculate = true;
         block.safe_feedrate = curr.safe_feedrate;
 
+        // Klipper-specific: Calculate rate vectors and initialize Klipper fields
+        if (machine.estimator_mode == EstimatorMode::Klipper) {
+            init_klipper_fields(block);
+
+            // Get start and end positions (X, Y, Z, E)
+            Vec4d start(m_start_position[X], m_start_position[Y],
+                        m_start_position[Z], m_start_position[E]);
+            Vec4d end(m_end_position[X], m_end_position[Y],
+                      m_end_position[Z], m_end_position[E]);
+
+            calculate_rate_vector(start, end,
+                block.klipper.rate_xyz,
+                block.klipper.rate_e,
+                block.klipper.is_kinematic,
+                block.klipper.has_xy_motion);
+
+            // Copy junction deviation from machine state
+            block.klipper.junction_deviation = machine.klipper_state.junction_deviation;
+        }
+
         // calculates block trapezoid
         block.calculate_trapezoid();
 
@@ -3748,6 +3834,26 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
         block.flags.nominal_length = (block.feedrate_profile.cruise <= v_allowable);
         block.flags.recalculate = true;
         block.safe_feedrate = curr.safe_feedrate;
+
+        // Klipper-specific: Calculate rate vectors and initialize Klipper fields
+        if (machine.estimator_mode == EstimatorMode::Klipper) {
+            init_klipper_fields(block);
+
+            // Get start and end positions (X, Y, Z, E)
+            Vec4d start(m_start_position[X], m_start_position[Y],
+                        m_start_position[Z], m_start_position[E]);
+            Vec4d end(m_end_position[X], m_end_position[Y],
+                      m_end_position[Z], m_end_position[E]);
+
+            calculate_rate_vector(start, end,
+                block.klipper.rate_xyz,
+                block.klipper.rate_e,
+                block.klipper.is_kinematic,
+                block.klipper.has_xy_motion);
+
+            // Copy junction deviation from machine state
+            block.klipper.junction_deviation = machine.klipper_state.junction_deviation;
+        }
 
         //BBS: calculates block trapezoid
         block.calculate_trapezoid();
