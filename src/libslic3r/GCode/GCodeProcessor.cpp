@@ -24,6 +24,7 @@
 #include <cctype>
 #include <algorithm>
 #include <charconv>
+#include <limits>
 #include <string>
 #include <system_error>
 
@@ -574,6 +575,7 @@ void klipper_backward_pass(
         // Skip non-Klipper blocks
         if (!block.klipper.is_kinematic && block.klipper.rate_e == 0) {
             next_smoothed_v2 = 0.0f;
+            block.klipper.reachable_start_v2 = 0.0f;
             continue;
         }
 
@@ -590,10 +592,13 @@ void klipper_backward_pass(
         // Calculate max start velocity from end velocity using full acceleration
         // max_dv2 = 2 * acceleration * distance
         // Using v_start² = v_end² + 2*a*d (note: + because we're going backward)
-        float max_start_from_end = end_v2 + block.klipper.max_dv2;
+        float reachable_start_v2 = end_v2 + block.klipper.max_dv2;
+
+        // Store reachable velocity for kinematic averaging in forward pass
+        block.klipper.reachable_start_v2 = reachable_start_v2;
 
         // Start velocity is minimum of junction limit and kinematic limit
-        float new_start_v2 = std::min(block.klipper.max_start_v2, max_start_from_end);
+        float new_start_v2 = std::min(block.klipper.max_start_v2, reachable_start_v2);
         block.klipper.max_start_v2 = new_start_v2;
 
         // Backward propagation of smoothed velocity constraint
@@ -624,26 +629,25 @@ void klipper_backward_pass(
         next_smoothed_v2 = smoothed_v2;
     }
 
-    // Second pass: propagate peak velocity backward to non-peak moves
-    // In Klipper, non-peak (delayed) moves are constrained by the peak ahead of them
-    // Process from end to start so each non-peak move inherits from the next peak
-    float current_peak_v2 = std::numeric_limits<float>::max();
+    // Propagate peak_cruise_v2 from peaks to delayed (non-peak) moves
+    // Delayed moves should be constrained by the next peak's cruise velocity
+    // (the peak they're slowing down for)
+    float active_peak_cruise_v2 = std::numeric_limits<float>::max();
     for (size_t i = blocks.size(); i > 0; --i) {
         size_t idx = i - 1;
         auto& block = blocks[idx];
 
-        // Skip non-movement blocks
         if (!block.klipper.is_kinematic && block.klipper.rate_e == 0) {
-            current_peak_v2 = std::numeric_limits<float>::max();
+            active_peak_cruise_v2 = std::numeric_limits<float>::max();
             continue;
         }
 
         if (block.klipper.is_peak) {
-            // This is a peak - it sets the constraint for moves before it
-            current_peak_v2 = block.klipper.peak_cruise_v2;
+            // Update active peak constraint
+            active_peak_cruise_v2 = block.klipper.peak_cruise_v2;
         } else {
-            // Non-peak move - inherit the peak velocity from the next peak
-            block.klipper.peak_cruise_v2 = current_peak_v2;
+            // Apply the peak constraint to this delayed move
+            block.klipper.peak_cruise_v2 = active_peak_cruise_v2;
         }
     }
 }
@@ -680,19 +684,29 @@ void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float 
             start_v2 = std::min(prev_end_v2, block.klipper.max_start_v2);
         }
 
-        // Calculate achievable cruise velocity using full acceleration
-        // Note: We use max_dv2 (not smoothed_dv2) for cruise calculation
-        // The smoothed constraint only affects junction velocities, not acceleration within a move
-        float cruise_v2 = std::min(
-            block.klipper.max_cruise_v2,
-            start_v2 + block.klipper.max_dv2
-        );
+        // Calculate cruise velocity based on whether this is a peak or delayed move
+        float cruise_v2;
 
-        // Apply peak velocity constraint (propagated from next peak in backward pass)
-        // Both peak and non-peak moves are constrained by this
-        if (block.klipper.peak_cruise_v2 > 0.0f &&
-            block.klipper.peak_cruise_v2 < std::numeric_limits<float>::max()) {
-            cruise_v2 = std::min(cruise_v2, block.klipper.peak_cruise_v2);
+        if (block.klipper.is_peak) {
+            // For peak moves: use kinematic averaging (Klipper algorithm)
+            // cruise_v2 = min((start_v2 + reachable_start_v2) × 0.5, max_cruise_v2, peak_cruise_v2)
+            float kinematic_avg = (start_v2 + block.klipper.reachable_start_v2) * 0.5f;
+            cruise_v2 = std::min({
+                kinematic_avg,
+                block.klipper.max_cruise_v2,
+                block.klipper.peak_cruise_v2
+            });
+        } else {
+            // For delayed (non-peak) moves: use kinematic start and peak constraint
+            // cruise_v2 = min(start_v2, peak_cruise_v2)
+            // But also respect max_cruise_v2 and what we can accelerate to
+            cruise_v2 = std::min(block.klipper.max_cruise_v2, start_v2 + block.klipper.max_dv2);
+
+            // Apply propagated peak constraint
+            if (block.klipper.peak_cruise_v2 > 0.0f &&
+                block.klipper.peak_cruise_v2 < std::numeric_limits<float>::max()) {
+                cruise_v2 = std::min(cruise_v2, block.klipper.peak_cruise_v2);
+            }
         }
 
         // Get next block's start velocity limit for end velocity

@@ -490,6 +490,7 @@ class Print;
                 float smoothed_dv2{0.0f};        // Smoothed delta-v squared (accel_to_decel)
 
                 float max_start_v2{0.0f};        // Max start velocity squared (from junction)
+                float reachable_start_v2{0.0f};  // Kinematically reachable start velocity (end_v2 + max_dv2)
                 float max_smoothed_v2{0.0f};     // Max smoothed start velocity squared
                 float peak_cruise_v2{0.0f};      // Peak cruise velocity limit (set when smoothed constraint is binding)
 
