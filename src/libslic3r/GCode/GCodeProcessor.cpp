@@ -185,6 +185,165 @@ void init_klipper_fields(GCodeProcessor::TimeBlock& block) {
     block.klipper.resolved_end_v = 0.0f;
 }
 
+// Calculate cos(theta) between two consecutive moves
+// Returns value in range [-1, 1]
+// cos_theta = 1 means same direction (0 degrees)
+// cos_theta = -1 means opposite direction (180 degrees)
+// cos_theta = 0 means perpendicular (90 degrees)
+float calculate_junction_cos_theta(const Vec3f& prev_rate, const Vec3f& curr_rate) {
+    // Dot product of unit vectors gives cos of angle between them
+    // We negate because we want angle between directions of travel,
+    // and prev_rate points INTO the junction while curr_rate points OUT
+    float dot = prev_rate.x() * curr_rate.x() +
+                prev_rate.y() * curr_rate.y() +
+                prev_rate.z() * curr_rate.z();
+
+    // Clamp to handle floating point errors
+    return std::clamp(-dot, -1.0f, 1.0f);
+}
+
+// Calculate max junction velocity² from junction deviation
+// This is the primary junction velocity limit in Klipper
+float calculate_junction_deviation_v2(
+    float cos_theta,
+    float junction_deviation,
+    float acceleration,
+    float max_cruise_v2)
+{
+    // Nearly co-linear moves (< 1 degree angle)
+    constexpr float COS_NEARLY_COLINEAR = 0.999847695f;  // cos(1°)
+    if (cos_theta >= COS_NEARLY_COLINEAR) {
+        return max_cruise_v2;
+    }
+
+    // Calculate sin and cos of half-angle
+    // Using half-angle formulas:
+    // sin(θ/2) = sqrt((1 - cos(θ)) / 2)
+    // cos(θ/2) = sqrt((1 + cos(θ)) / 2)
+    float sin_theta_d2 = std::sqrt(0.5f * (1.0f - cos_theta));
+    float cos_theta_d2 = std::sqrt(0.5f * (1.0f + cos_theta));
+
+    // Avoid division by zero for sharp corners
+    if (sin_theta_d2 >= 0.999f) {
+        // Very sharp corner (> ~160 degrees) - use minimum velocity
+        return acceleration * junction_deviation;
+    }
+
+    // Junction deviation formula from Klipper
+    // v² = junction_deviation * acceleration * sin(θ/2) / (1 - sin(θ/2))
+    float v2 = junction_deviation * acceleration * sin_theta_d2 / (1.0f - sin_theta_d2);
+
+    return std::min(v2, max_cruise_v2);
+}
+
+// Calculate max junction velocity² from centripetal acceleration limit
+// This prevents excessive lateral acceleration on curved paths
+float calculate_centripetal_v2(
+    float move_distance,
+    float acceleration,
+    float cos_theta)
+{
+    // Near-reversal moves have zero centripetal limit
+    constexpr float COS_NEAR_REVERSAL = -0.999f;
+    if (cos_theta <= COS_NEAR_REVERSAL) {
+        return 0.0f;
+    }
+
+    // sin(theta) from cos(theta)
+    float sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
+
+    // Avoid division by zero for co-linear moves
+    float denom = 1.0f - cos_theta;
+    if (denom < 0.0001f) {
+        return std::numeric_limits<float>::max();  // No centripetal limit
+    }
+
+    // Centripetal formula: v² = 0.5 * d * a * sin(θ) / (1 - cos(θ))
+    return 0.5f * move_distance * acceleration * sin_theta / denom;
+}
+
+// Calculate max junction velocity² from extruder rate change limit
+// This prevents excessive instantaneous extrusion rate changes
+float calculate_extruder_junction_v2(
+    float prev_rate_e,
+    float curr_rate_e,
+    float instant_corner_velocity)
+{
+    float delta_e_rate = std::abs(curr_rate_e - prev_rate_e);
+
+    // No rate change = no limit
+    if (delta_e_rate < 0.0001f) {
+        return std::numeric_limits<float>::max();
+    }
+
+    // v² = (ICV / delta_e_rate)²
+    float v = instant_corner_velocity / delta_e_rate;
+    return v * v;
+}
+
+// Calculate all junction limits and set max_start_v2 for a block
+// prev_block: the preceding block (nullptr for first block)
+// curr_block: the current block being processed
+// klipper_state: machine's Klipper configuration
+void calculate_klipper_junction(
+    const GCodeProcessor::TimeBlock* prev_block,
+    GCodeProcessor::TimeBlock& curr_block,
+    const GCodeProcessor::KlipperState& state)
+{
+    // First block starts from rest
+    if (prev_block == nullptr) {
+        curr_block.klipper.max_start_v2 = 0.0f;
+        curr_block.klipper.max_smoothed_v2 = 0.0f;
+        return;
+    }
+
+    // Non-kinematic moves (E-only) use only extruder junction logic
+    if (!curr_block.klipper.is_kinematic || !prev_block->klipper.is_kinematic) {
+        // For E-only moves, junction velocity is limited by instant_corner_velocity
+        float icv = state.instant_corner_velocity;
+        curr_block.klipper.max_start_v2 = icv * icv;
+        curr_block.klipper.max_smoothed_v2 = icv * icv;
+        return;
+    }
+
+    // Calculate angle between moves
+    float cos_theta = calculate_junction_cos_theta(
+        prev_block->klipper.rate_xyz,
+        curr_block.klipper.rate_xyz);
+
+    // Calculate junction deviation limit
+    float jd_v2 = calculate_junction_deviation_v2(
+        cos_theta,
+        state.junction_deviation,
+        curr_block.acceleration,  // Use block's acceleration
+        std::min(prev_block->klipper.max_cruise_v2, curr_block.klipper.max_cruise_v2));
+
+    // Calculate centripetal limit
+    float cent_v2 = calculate_centripetal_v2(
+        curr_block.distance,  // Use current block's distance
+        curr_block.acceleration,
+        cos_theta);
+
+    // Calculate extruder limit
+    float ext_v2 = calculate_extruder_junction_v2(
+        prev_block->klipper.rate_e,
+        curr_block.klipper.rate_e,
+        state.instant_corner_velocity);
+
+    // Combined junction velocity is minimum of all limits
+    float max_start_v2 = std::min({jd_v2, cent_v2, ext_v2});
+
+    // Also limit by cruise velocities
+    max_start_v2 = std::min(max_start_v2, prev_block->klipper.max_cruise_v2);
+    max_start_v2 = std::min(max_start_v2, curr_block.klipper.max_cruise_v2);
+
+    curr_block.klipper.max_start_v2 = max_start_v2;
+
+    // Smoothed velocity uses accel_to_decel
+    // For now, set equal to max_start_v2 (proper smoothing in two-pass planner)
+    curr_block.klipper.max_smoothed_v2 = max_start_v2;
+}
+
 } // namespace
 
 static constexpr double kPI = 3.14159265358979323846;
@@ -3356,6 +3515,24 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
 
             // Copy junction deviation from machine state
             block.klipper.junction_deviation = machine.klipper_state.junction_deviation;
+
+            // Set max cruise velocity squared
+            // feedrate is in mm/min, convert to mm/s
+            float feedrate_mms = block.feedrate / 60.0f;
+            block.klipper.max_cruise_v2 = feedrate_mms * feedrate_mms;
+
+            // Set max_dv2 based on acceleration
+            // max_dv2 = 2 * acceleration * distance (for kinematic equation v² = 2*a*d)
+            block.klipper.max_dv2 = 2.0f * block.acceleration * block.distance;
+
+            // Get previous block for junction calculation
+            const TimeBlock* prev_block = nullptr;
+            if (!machine.blocks.empty()) {
+                prev_block = &machine.blocks.back();
+            }
+
+            // Calculate junction velocity
+            calculate_klipper_junction(prev_block, block, machine.klipper_state);
         }
 
         // calculates block trapezoid
@@ -3853,6 +4030,24 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
 
             // Copy junction deviation from machine state
             block.klipper.junction_deviation = machine.klipper_state.junction_deviation;
+
+            // Set max cruise velocity squared
+            // feedrate is in mm/min, convert to mm/s
+            float feedrate_mms = block.feedrate / 60.0f;
+            block.klipper.max_cruise_v2 = feedrate_mms * feedrate_mms;
+
+            // Set max_dv2 based on acceleration
+            // max_dv2 = 2 * acceleration * distance (for kinematic equation v² = 2*a*d)
+            block.klipper.max_dv2 = 2.0f * block.acceleration * block.distance;
+
+            // Get previous block for junction calculation
+            const TimeBlock* prev_block = nullptr;
+            if (!machine.blocks.empty()) {
+                prev_block = &machine.blocks.back();
+            }
+
+            // Calculate junction velocity
+            calculate_klipper_junction(prev_block, block, machine.klipper_state);
         }
 
         //BBS: calculates block trapezoid
