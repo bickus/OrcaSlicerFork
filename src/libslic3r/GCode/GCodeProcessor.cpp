@@ -4157,9 +4157,11 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
                 prev_block = &machine.blocks.back();
             }
 
-            // Calculate junction velocity using SCV (junction_deviation is computed per-block)
+            // Calculate junction velocity using DYNAMIC SCV (from SET_VELOCITY_LIMIT)
+            // machine.square_corner_velocity is updated when parsing SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=...
+            // This captures per-feature SCV changes in the G-code
             calculate_klipper_junction(prev_block, block,
-                machine.klipper_state.square_corner_velocity,
+                machine.square_corner_velocity,
                 machine.klipper_state.instant_corner_velocity);
         }
 
@@ -4742,9 +4744,11 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
                 prev_block = &machine.blocks.back();
             }
 
-            // Calculate junction velocity using SCV (junction_deviation is computed per-block)
+            // Calculate junction velocity using DYNAMIC SCV (from SET_VELOCITY_LIMIT)
+            // machine.square_corner_velocity is updated when parsing SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=...
+            // This captures per-feature SCV changes in the G-code
             calculate_klipper_junction(prev_block, block,
-                machine.klipper_state.square_corner_velocity,
+                machine.square_corner_velocity,
                 machine.klipper_state.instant_corner_velocity);
         }
 
