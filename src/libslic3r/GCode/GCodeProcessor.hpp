@@ -603,6 +603,8 @@ class Print;
             // Simulates firmware st_synchronize() call
             void simulate_st_synchronize(float additional_time = 0.0f);
             void calculate_time(size_t keep_last_n_blocks = 0, float additional_time = 0.0f);
+            void calculate_time_legacy(size_t keep_last_n_blocks = 0, float additional_time = 0.0f);
+            void calculate_time_klipper(size_t keep_last_n_blocks = 0, float additional_time = 0.0f);
         };
 
         struct TimeProcessor

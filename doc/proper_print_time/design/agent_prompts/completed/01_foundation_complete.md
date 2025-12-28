@@ -42,6 +42,12 @@ EstimatorMode estimator_mode{EstimatorMode::Legacy};
 KlipperState klipper_state;
 ```
 
+**Lines 606-607: Added function declarations for new methods**
+```cpp
+void calculate_time_legacy(size_t keep_last_n_blocks = 0, float additional_time = 0.0f);
+void calculate_time_klipper(size_t keep_last_n_blocks = 0, float additional_time = 0.0f);
+```
+
 **Lines 483-505: Extended TimeBlock with KlipperFields struct**
 ```cpp
 // Klipper-specific fields (only used when estimator_mode == Klipper)
@@ -215,6 +221,21 @@ if (mode == EstimatorMode::Klipper) {
 **Decision:** Did not implement rate vector calculation in this deliverable since it wasn't in the explicit task list.
 
 **For next agent:** Rate vector calculation (`block.rate_xyz`, `block.rate_e`, `block.is_kinematic`, `block.has_xy_motion`) should be added when processing G0/G1 moves. Reference design doc section 1.5.
+
+## Compilation Fixes Applied
+
+### Fix 1: Missing function declarations
+**Issue:** Initial implementation added function implementations in .cpp but forgot to add corresponding declarations in .hpp, causing compilation errors:
+- `'calculate_time_legacy': is not a member of 'Slic3r::GCodeProcessor::TimeMachine'`
+- `'calculate_time_klipper': is not a member of 'Slic3r::GCodeProcessor::TimeMachine'`
+
+**Fix:** Added function declarations to GCodeProcessor.hpp lines 606-607:
+```cpp
+void calculate_time_legacy(size_t keep_last_n_blocks = 0, float additional_time = 0.0f);
+void calculate_time_klipper(size_t keep_last_n_blocks = 0, float additional_time = 0.0f);
+```
+
+**Status:** ✅ Fixed - All compilation errors resolved
 
 ## Self-Validation Results
 
