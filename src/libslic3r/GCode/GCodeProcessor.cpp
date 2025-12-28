@@ -555,11 +555,14 @@ struct DelayedMove {
 
 // Backward pass: propagate velocity limits from end to start
 // Sets max_start_v2 based on kinematic constraints using full acceleration
+// Also propagates smoothed velocity constraint backward (for minimum_cruise_ratio)
 void klipper_backward_pass(
     std::vector<GCodeProcessor::TimeBlock>& blocks,
     std::vector<DelayedMove>& delayed_moves)
 {
     if (blocks.empty()) return;
+
+    float next_smoothed_v2 = 0.0f;  // Last block must end at zero (smoothed constraint)
 
     // Process from end to start
     for (size_t i = blocks.size(); i > 0; --i) {
@@ -568,6 +571,7 @@ void klipper_backward_pass(
 
         // Skip non-Klipper blocks
         if (!block.klipper.is_kinematic && block.klipper.rate_e == 0) {
+            next_smoothed_v2 = 0.0f;
             continue;
         }
 
@@ -589,6 +593,17 @@ void klipper_backward_pass(
         // Start velocity is minimum of junction limit and kinematic limit
         float new_start_v2 = std::min(block.klipper.max_start_v2, max_start_from_end);
         block.klipper.max_start_v2 = new_start_v2;
+
+        // Backward propagation of smoothed velocity constraint
+        // What velocity can we have at this block considering smoothed deceleration ahead?
+        float reachable_smoothed_v2 = next_smoothed_v2 + block.klipper.smoothed_dv2;
+        float backward_smoothed_v2 = std::min(block.klipper.max_smoothed_v2, reachable_smoothed_v2);
+
+        // Update max_smoothed_v2 to be the minimum of forward and backward constraints
+        // This ensures the smoothed constraint is respected in both directions
+        block.klipper.max_smoothed_v2 = backward_smoothed_v2;
+
+        next_smoothed_v2 = backward_smoothed_v2;
     }
 }
 
@@ -621,6 +636,15 @@ void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float 
             block.klipper.max_cruise_v2,
             start_v2 + block.klipper.max_dv2
         );
+
+        // Apply smoothed velocity constraint from minimum_cruise_ratio
+        // max_smoothed_v2 represents the maximum velocity achievable considering
+        // the smoothed acceleration constraint (accel_to_decel) from previous moves
+        // This ensures the printer maintains cruise velocity for minimum_cruise_ratio
+        // fraction of each move
+        if (block.klipper.max_smoothed_v2 > 0.0f) {
+            cruise_v2 = std::min(cruise_v2, block.klipper.max_smoothed_v2);
+        }
 
         // Get next block's start velocity limit for end velocity
         float next_start_v2;
