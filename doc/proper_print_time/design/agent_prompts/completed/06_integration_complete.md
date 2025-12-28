@@ -16,14 +16,24 @@ Successfully integrated all Klipper time estimation components into OrcaSlicer's
 
 ## Files Modified
 
+**Note:** The compilation fix moved helper functions from anonymous namespace to `TimeMachine` member functions. See the "Compilation Fixes" section for details.
+
+### `src/libslic3r/GCode/GCodeProcessor.hpp`
+
+**Lines 610-614: Added member function declarations to TimeMachine struct**
+```cpp
+// Deliverable 6: Time accumulation helpers
+void accumulate_layer_time(const TimeBlock& block, float block_time);
+void accumulate_feature_time(const TimeBlock& block, float block_time);
+void accumulate_block_time(TimeBlock& block, float block_time);
+void verify_time_consistency() const;
+```
+
 ### `src/libslic3r/GCode/GCodeProcessor.cpp`
 
-**Lines 670-697: Added accumulate_layer_time() function**
+**Lines 1120-1143: TimeMachine::accumulate_layer_time() member function**
 ```cpp
-void accumulate_layer_time(
-    GCodeProcessor::TimeMachine& machine,
-    const GCodeProcessor::TimeBlock& block,
-    float block_time)
+void GCodeProcessor::TimeMachine::accumulate_layer_time(const TimeBlock& block, float block_time)
 {
     // Get current layer ID from the block
     int layer_id = block.layer_id;
@@ -35,130 +45,122 @@ void accumulate_layer_time(
 
     // Ensure layer times vector is large enough
     // layer_id is 1-based, so we need at least layer_id elements
-    if (layer_id > 0 && static_cast<size_t>(layer_id) > machine.layers_time.size()) {
-        const size_t curr_size = machine.layers_time.size();
-        machine.layers_time.resize(layer_id, 0.0f);
+    if (layer_id > 0 && static_cast<size_t>(layer_id) > layers_time.size()) {
+        const size_t curr_size = layers_time.size();
+        layers_time.resize(layer_id, 0.0f);
     }
 
     // Accumulate time to the layer (layer_id is 1-based, vector is 0-based)
     if (layer_id > 0) {
-        machine.layers_time[layer_id - 1] += block_time;
+        layers_time[layer_id - 1] += block_time;
     }
 }
 ```
 
-**Lines 700-719: Added accumulate_feature_time() function**
+**Lines 1146-1162: TimeMachine::accumulate_feature_time() member function**
 ```cpp
-void accumulate_feature_time(
-    GCodeProcessor::TimeMachine& machine,
-    const GCodeProcessor::TimeBlock& block,
-    float block_time)
+void GCodeProcessor::TimeMachine::accumulate_feature_time(const TimeBlock& block, float block_time)
 {
     // Accumulate by extrusion role
     size_t role_index = static_cast<size_t>(block.role);
-    if (role_index < machine.roles_time.size()) {
-        machine.roles_time[role_index] += block_time;
+    if (role_index < roles_time.size()) {
+        roles_time[role_index] += block_time;
     }
 
     // Accumulate by move type (travel, extrude, retract, etc.)
     // Don't calculate travel of start gcode into travel time
     if (!block.flags.prepare_stage || block.move_type != EMoveType::Travel) {
         size_t move_type_index = static_cast<size_t>(block.move_type);
-        if (move_type_index < machine.moves_time.size()) {
-            machine.moves_time[move_type_index] += block_time;
+        if (move_type_index < moves_time.size()) {
+            moves_time[move_type_index] += block_time;
         }
     }
 }
 ```
 
-**Lines 722-761: Added accumulate_block_time() unified function**
+**Lines 1165-1201: TimeMachine::accumulate_block_time() unified member function**
 ```cpp
-void accumulate_block_time(
-    GCodeProcessor::TimeMachine& machine,
-    GCodeProcessor::TimeBlock& block,
-    float block_time)
+void GCodeProcessor::TimeMachine::accumulate_block_time(TimeBlock& block, float block_time)
 {
     // Accumulate total time
-    machine.time += block_time;
-    machine.gcode_time.cache += block_time;
+    time += block_time;
+    gcode_time.cache += block_time;
 
     // Accumulate layer time
-    accumulate_layer_time(machine, block, block_time);
+    accumulate_layer_time(block, block_time);
 
     // Accumulate feature/role time and move type time
-    accumulate_feature_time(machine, block, block_time);
+    accumulate_feature_time(block, block_time);
 
     // Accumulate prepare time if this is a preparation stage block
     if (block.flags.prepare_stage) {
-        machine.prepare_time += block_time;
+        prepare_time += block_time;
     }
 
     // Cache G1 line times for UI
-    machine.g1_times_cache.push_back({
+    g1_times_cache.push_back({
         block.g1_line_id,
         block.remaining_internal_g1_lines,
-        machine.time
+        time
     });
 
     // Update times for remaining time to printer stop placeholders
     auto it_stop_time = std::lower_bound(
-        machine.stop_times.begin(),
-        machine.stop_times.end(),
+        stop_times.begin(),
+        stop_times.end(),
         block.g1_line_id,
-        [](const GCodeProcessor::TimeMachine::StopTime& t, unsigned int value) {
+        [](const StopTime& t, unsigned int value) {
             return t.g1_line_id < value;
         });
-    if (it_stop_time != machine.stop_times.end() &&
+    if (it_stop_time != stop_times.end() &&
         it_stop_time->g1_line_id == block.g1_line_id) {
-        it_stop_time->elapsed_time = machine.time;
+        it_stop_time->elapsed_time = time;
     }
 }
 ```
 
-**Lines 764-798: Added verify_time_consistency() debug function**
+**Lines 1204-1236: TimeMachine::verify_time_consistency() const member function**
 ```cpp
-void verify_time_consistency(const GCodeProcessor::TimeMachine& machine)
+void GCodeProcessor::TimeMachine::verify_time_consistency() const
 {
 #ifdef _DEBUG
     // Sum of layer times should approximately equal total time
     float layer_sum = 0.0f;
-    for (float t : machine.layers_time) {
+    for (float t : layers_time) {
         layer_sum += t;
     }
 
     // Allow 1% tolerance for rounding and preparation time
-    float tolerance = machine.time * 0.01f;
-    bool layers_match = std::abs(layer_sum - (machine.time - machine.prepare_time)) < tolerance;
+    float tolerance = time * 0.01f;
+    bool layers_match = std::abs(layer_sum - (time - prepare_time)) < tolerance;
 
     // Sum of feature/role times should approximately equal total time
     float role_sum = 0.0f;
-    for (float t : machine.roles_time) {
+    for (float t : roles_time) {
         role_sum += t;
     }
-    bool roles_match = std::abs(role_sum - machine.time) < tolerance;
+    bool roles_match = std::abs(role_sum - time) < tolerance;
 
     // In debug builds, warn on inconsistency
     if (!layers_match) {
         BOOST_LOG_TRIVIAL(warning) << "Klipper time estimation: Layer times sum ("
             << layer_sum << ") doesn't match total minus prep ("
-            << (machine.time - machine.prepare_time) << ")";
+            << (time - prepare_time) << ")";
     }
     if (!roles_match) {
         BOOST_LOG_TRIVIAL(warning) << "Klipper time estimation: Role times sum ("
             << role_sum << ") doesn't match total time ("
-            << machine.time << ")";
+            << time << ")";
     }
-#else
-    (void)machine;  // Suppress unused parameter warning in release builds
 #endif
 }
 ```
 
-**Lines 1219-1220: Refactored calculate_time_klipper() to use accumulate_block_time()**
+**Line 1086: Refactored calculate_time_klipper() to use accumulate_block_time()**
 ```cpp
-// Old implementation (lines 1218-1249): Inline accumulation logic
-// New implementation (line 1220): Single call to helper function
-accumulate_block_time(*this, block, block_time);
+// Old implementation (inline accumulation): ~30 lines
+// New implementation (line 1086): Single call to member function
+accumulate_block_time(block, block_time);
 ```
 
 This replaced ~30 lines of inline accumulation code with a single function call, improving clarity and maintainability.
@@ -577,6 +579,68 @@ This deliverable completes the integration chain:
 - ~30 lines added (record_block_kinematics Klipper support)
 
 **Net change:** ~180 lines added/modified
+
+## Compilation Fixes
+
+### Initial Implementation Issue
+
+The initial implementation placed the time accumulation helper functions in the anonymous namespace, which caused compilation errors because they needed to access the private `TimeMachine` struct:
+
+**Error C2248:** `'Slic3r::GCodeProcessor::TimeMachine': cannot access private struct declared in class 'Slic3r::GCodeProcessor'`
+
+This error occurred at lines 672, 701, 723, 754, and 764 for:
+- `accumulate_layer_time()`
+- `accumulate_feature_time()`
+- `accumulate_block_time()`
+- Lambda in `accumulate_block_time()`
+- `verify_time_consistency()`
+
+### Solution Applied
+
+**Moved helper functions to be member functions of `TimeMachine` struct:**
+
+**Header file changes (GCodeProcessor.hpp lines 610-614):**
+```cpp
+// Deliverable 6: Time accumulation helpers
+void accumulate_layer_time(const TimeBlock& block, float block_time);
+void accumulate_feature_time(const TimeBlock& block, float block_time);
+void accumulate_block_time(TimeBlock& block, float block_time);
+void verify_time_consistency() const;
+```
+
+**Implementation changes (GCodeProcessor.cpp lines 1115-1236):**
+- Removed functions from anonymous namespace (lines 666-798 deleted)
+- Added as `TimeMachine` member functions after `calculate_time()` (lines 1115-1236)
+- Changed function signatures from taking `TimeMachine&` parameter to being member functions
+- Changed references from `machine.field` to `this->field` (implicit `this`)
+
+**Call site updates:**
+1. **Line 1086:** Changed `accumulate_block_time(*this, block, block_time)` to `accumulate_block_time(block, block_time)`
+2. **Line 2316:** Changed `verify_time_consistency(machine)` to `machine.verify_time_consistency()`
+
+### Rationale for Member Function Approach
+
+**Why make them member functions instead of friend functions or static helpers:**
+
+1. **Natural access:** Member functions have natural access to all `TimeMachine` private fields
+2. **Cleaner syntax:** `machine.accumulate_block_time(...)` is more readable than helper function calls
+3. **Encapsulation:** Keeps time accumulation logic with the `TimeMachine` that owns the data
+4. **Consistent with existing design:** Other `TimeMachine` functions (`calculate_time()`, `reset()`, etc.) are member functions
+5. **No header pollution:** Doesn't require forward declarations or friend declarations
+
+### Updated File Locations
+
+**src/libslic3r/GCode/GCodeProcessor.hpp:**
+- Lines 610-614: Member function declarations added to `TimeMachine` struct
+
+**src/libslic3r/GCode/GCodeProcessor.cpp:**
+- Lines 1115-1236: Member function implementations
+  - Lines 1120-1143: `accumulate_layer_time()` implementation
+  - Lines 1146-1162: `accumulate_feature_time()` implementation
+  - Lines 1165-1201: `accumulate_block_time()` implementation
+  - Lines 1204-1236: `verify_time_consistency()` implementation
+- Line 1086: Call site in `calculate_time_klipper()`
+- Line 2316: Call site in `finalize()`
 
 ## Conclusion
 

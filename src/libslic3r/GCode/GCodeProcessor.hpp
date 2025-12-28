@@ -606,6 +606,12 @@ class Print;
             void calculate_time(size_t keep_last_n_blocks = 0, float additional_time = 0.0f);
             void calculate_time_legacy(size_t keep_last_n_blocks = 0, float additional_time = 0.0f);
             void calculate_time_klipper(size_t keep_last_n_blocks = 0, float additional_time = 0.0f);
+
+            // Deliverable 6: Time accumulation helpers
+            void accumulate_layer_time(const TimeBlock& block, float block_time);
+            void accumulate_feature_time(const TimeBlock& block, float block_time);
+            void accumulate_block_time(TimeBlock& block, float block_time);
+            void verify_time_consistency() const;
         };
 
         struct TimeProcessor
