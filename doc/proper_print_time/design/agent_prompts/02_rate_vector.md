@@ -4,8 +4,6 @@
 
 You are implementing rate vector calculation for the Klipper print time estimation feature. This is deliverable 2 of 8. Your work builds on the foundation established in Deliverable 1 and provides the rate vectors needed for junction velocity calculation in Deliverable 3.
 
-**Branch**: `claude/fix-print-time-estimation-tmz9u`
-
 ## Prerequisites
 
 Before starting, read:

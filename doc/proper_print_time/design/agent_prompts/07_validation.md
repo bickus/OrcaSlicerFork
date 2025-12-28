@@ -4,8 +4,6 @@
 
 You are performing comprehensive code review and static validation of the Klipper time estimation implementation. This is deliverable 7 of 8. Your work ensures all previous deliverables are correctly implemented and work together as designed.
 
-**Branch**: `claude/fix-print-time-estimation-tmz9u`
-
 ## Prerequisites
 
 Before starting, read **ALL** previous agents' completion reports:

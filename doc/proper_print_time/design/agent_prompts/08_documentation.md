@@ -4,8 +4,6 @@
 
 You are performing the final documentation and code polish for the Klipper time estimation implementation. This is the final deliverable (8 of 8). Your work ensures the implementation is well-documented, maintainable, and ready for review.
 
-**Branch**: `claude/fix-print-time-estimation-tmz9u`
-
 ## Prerequisites
 
 Before starting, read **ALL** previous agents' completion reports:

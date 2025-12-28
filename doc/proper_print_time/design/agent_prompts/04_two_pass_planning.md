@@ -4,8 +4,6 @@
 
 You are implementing the Klipper two-pass velocity planning algorithm. This is deliverable 4 of 8 and is the **core** of the Klipper time estimation algorithm. Your work takes the junction velocities from Deliverable 3 and resolves them into actual achievable velocities using backward and forward passes.
 
-**Branch**: `claude/fix-print-time-estimation-tmz9u`
-
 ## Prerequisites
 
 Before starting, read:

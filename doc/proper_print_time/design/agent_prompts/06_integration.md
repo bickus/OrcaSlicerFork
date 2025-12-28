@@ -4,8 +4,6 @@
 
 You are integrating all Klipper time estimation components and ensuring consistency across the application. This is deliverable 6 of 8. Your work connects the time calculation to layer times, feature times, and the preview visualization.
 
-**Branch**: `claude/fix-print-time-estimation-tmz9u`
-
 ## Prerequisites
 
 Before starting, read:

@@ -4,8 +4,6 @@
 
 You are implementing the Klipper junction velocity calculation algorithm. This is deliverable 3 of 8. Your work uses the rate vectors from Deliverable 2 to calculate how fast the printer can traverse junctions between consecutive moves.
 
-**Branch**: `claude/fix-print-time-estimation-tmz9u`
-
 ## Prerequisites
 
 Before starting, read:

@@ -4,7 +4,6 @@
 
 You are implementing axis-specific and extruder-specific velocity/acceleration limiters for Klipper time estimation. This is deliverable 5 of 8. These "move checkers" ensure that the velocity planning respects per-axis limits and feature-specific acceleration settings.
 
-**Branch**: `claude/fix-print-time-estimation-tmz9u`
 
 ## Prerequisites
 
