@@ -402,11 +402,19 @@ void calculate_klipper_junction(
     max_start_v2 = std::min(max_start_v2, prev_block->klipper.max_cruise_v2);
     max_start_v2 = std::min(max_start_v2, curr_block.klipper.max_cruise_v2);
 
+    // CRITICAL: Also limit by what the previous move can kinematically reach
+    // This propagates the acceleration constraint forward
+    // max_start_v2 <= prev_max_start_v2 + prev_max_dv2
+    float prev_kinematic_limit = prev_block->klipper.max_start_v2 + prev_block->klipper.max_dv2;
+    max_start_v2 = std::min(max_start_v2, prev_kinematic_limit);
+
     curr_block.klipper.max_start_v2 = max_start_v2;
 
-    // Smoothed velocity uses accel_to_decel
-    // For now, set equal to max_start_v2 (proper smoothing in two-pass planner)
-    curr_block.klipper.max_smoothed_v2 = max_start_v2;
+    // Smoothed velocity: limits how quickly velocity can build up across moves
+    // max_smoothed_v2 = min(max_start_v2, prev_max_smoothed_v2 + prev_smoothed_dv2)
+    // This uses smoothed_dv2 which is based on accel_to_decel (from cruise_ratio)
+    float prev_smoothed_limit = prev_block->klipper.max_smoothed_v2 + prev_block->klipper.smoothed_dv2;
+    curr_block.klipper.max_smoothed_v2 = std::min(max_start_v2, prev_smoothed_limit);
 }
 
 // ============================================================================
