@@ -623,6 +623,29 @@ void klipper_backward_pass(
 
         next_smoothed_v2 = smoothed_v2;
     }
+
+    // Second pass: propagate peak velocity backward to non-peak moves
+    // In Klipper, non-peak (delayed) moves are constrained by the peak ahead of them
+    // Process from end to start so each non-peak move inherits from the next peak
+    float current_peak_v2 = std::numeric_limits<float>::max();
+    for (size_t i = blocks.size(); i > 0; --i) {
+        size_t idx = i - 1;
+        auto& block = blocks[idx];
+
+        // Skip non-movement blocks
+        if (!block.klipper.is_kinematic && block.klipper.rate_e == 0) {
+            current_peak_v2 = std::numeric_limits<float>::max();
+            continue;
+        }
+
+        if (block.klipper.is_peak) {
+            // This is a peak - it sets the constraint for moves before it
+            current_peak_v2 = block.klipper.peak_cruise_v2;
+        } else {
+            // Non-peak move - inherit the peak velocity from the next peak
+            block.klipper.peak_cruise_v2 = current_peak_v2;
+        }
+    }
 }
 
 // Forward pass: finalize velocities from start to end
@@ -665,11 +688,10 @@ void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float 
             start_v2 + block.klipper.max_dv2
         );
 
-        // Apply peak cruise velocity constraint
-        // When the smoothed constraint is binding (is_peak), limit cruise velocity
-        // This matches Klipper's "delayed moves" mechanism where peak moves have
-        // their cruise velocity limited to maintain the smoothed acceleration profile
-        if (block.klipper.is_peak && block.klipper.peak_cruise_v2 > 0.0f) {
+        // Apply peak velocity constraint (propagated from next peak in backward pass)
+        // Both peak and non-peak moves are constrained by this
+        if (block.klipper.peak_cruise_v2 > 0.0f &&
+            block.klipper.peak_cruise_v2 < std::numeric_limits<float>::max()) {
             cruise_v2 = std::min(cruise_v2, block.klipper.peak_cruise_v2);
         }
 
