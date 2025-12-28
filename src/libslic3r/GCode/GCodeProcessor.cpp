@@ -663,6 +663,140 @@ float calculate_klipper_block_time(GCodeProcessor::TimeBlock& block)
     return total_time;
 }
 
+// ============================================================================
+// Deliverable 6: Integration - Time Accumulation Helpers
+// ============================================================================
+
+// Accumulate time for the current layer
+void accumulate_layer_time(
+    GCodeProcessor::TimeMachine& machine,
+    const GCodeProcessor::TimeBlock& block,
+    float block_time)
+{
+    // Get current layer ID from the block
+    int layer_id = block.layer_id;
+
+    // Handle edge cases
+    if (layer_id < 0) {
+        // Pre-print moves (shouldn't happen, but handle gracefully)
+        layer_id = 0;
+    }
+
+    // Ensure layer times vector is large enough
+    // layer_id is 1-based, so we need at least layer_id elements
+    if (layer_id > 0 && static_cast<size_t>(layer_id) > machine.layers_time.size()) {
+        const size_t curr_size = machine.layers_time.size();
+        machine.layers_time.resize(layer_id, 0.0f);
+        // Initialize new slots to zero (resize with value does this)
+    }
+
+    // Accumulate time to the layer (layer_id is 1-based, vector is 0-based)
+    if (layer_id > 0) {
+        machine.layers_time[layer_id - 1] += block_time;
+    }
+}
+
+// Accumulate time for the current feature/role
+void accumulate_feature_time(
+    GCodeProcessor::TimeMachine& machine,
+    const GCodeProcessor::TimeBlock& block,
+    float block_time)
+{
+    // Accumulate by extrusion role
+    size_t role_index = static_cast<size_t>(block.role);
+    if (role_index < machine.roles_time.size()) {
+        machine.roles_time[role_index] += block_time;
+    }
+
+    // Accumulate by move type (travel, extrude, retract, etc.)
+    // Don't calculate travel of start gcode into travel time
+    if (!block.flags.prepare_stage || block.move_type != EMoveType::Travel) {
+        size_t move_type_index = static_cast<size_t>(block.move_type);
+        if (move_type_index < machine.moves_time.size()) {
+            machine.moves_time[move_type_index] += block_time;
+        }
+    }
+}
+
+// Combined block time accumulation - calls all accumulation helpers
+void accumulate_block_time(
+    GCodeProcessor::TimeMachine& machine,
+    GCodeProcessor::TimeBlock& block,
+    float block_time)
+{
+    // Accumulate total time
+    machine.time += block_time;
+    machine.gcode_time.cache += block_time;
+
+    // Accumulate layer time
+    accumulate_layer_time(machine, block, block_time);
+
+    // Accumulate feature/role time and move type time
+    accumulate_feature_time(machine, block, block_time);
+
+    // Accumulate prepare time if this is a preparation stage block
+    if (block.flags.prepare_stage) {
+        machine.prepare_time += block_time;
+    }
+
+    // Cache G1 line times for UI
+    machine.g1_times_cache.push_back({
+        block.g1_line_id,
+        block.remaining_internal_g1_lines,
+        machine.time
+    });
+
+    // Update times for remaining time to printer stop placeholders
+    auto it_stop_time = std::lower_bound(
+        machine.stop_times.begin(),
+        machine.stop_times.end(),
+        block.g1_line_id,
+        [](const GCodeProcessor::TimeMachine::StopTime& t, unsigned int value) {
+            return t.g1_line_id < value;
+        });
+    if (it_stop_time != machine.stop_times.end() &&
+        it_stop_time->g1_line_id == block.g1_line_id) {
+        it_stop_time->elapsed_time = machine.time;
+    }
+}
+
+// Verify that times are internally consistent (for debug/validation)
+void verify_time_consistency(const GCodeProcessor::TimeMachine& machine)
+{
+#ifdef _DEBUG
+    // Sum of layer times should approximately equal total time
+    float layer_sum = 0.0f;
+    for (float t : machine.layers_time) {
+        layer_sum += t;
+    }
+
+    // Allow 1% tolerance for rounding and preparation time
+    float tolerance = machine.time * 0.01f;
+    bool layers_match = std::abs(layer_sum - (machine.time - machine.prepare_time)) < tolerance;
+
+    // Sum of feature/role times should approximately equal total time (excluding prep)
+    float role_sum = 0.0f;
+    for (float t : machine.roles_time) {
+        role_sum += t;
+    }
+    bool roles_match = std::abs(role_sum - machine.time) < tolerance;
+
+    // In debug builds, warn on inconsistency
+    if (!layers_match) {
+        BOOST_LOG_TRIVIAL(warning) << "Klipper time estimation: Layer times sum ("
+            << layer_sum << ") doesn't match total minus prep ("
+            << (machine.time - machine.prepare_time) << ")";
+    }
+    if (!roles_match) {
+        BOOST_LOG_TRIVIAL(warning) << "Klipper time estimation: Role times sum ("
+            << role_sum << ") doesn't match total time ("
+            << machine.time << ")";
+    }
+#else
+    (void)machine;  // Suppress unused parameter warning in release builds
+#endif
+}
+
 } // namespace
 
 static constexpr double kPI = 3.14159265358979323846;
@@ -1078,41 +1212,12 @@ void GCodeProcessor::TimeMachine::calculate_time_klipper(size_t keep_last_n_bloc
         // Calculate block time using Klipper algorithm
         float block_time = calculate_klipper_block_time(block);
 
+        // Add additional time to first block (e.g., for custom gcode)
         if (i == 0)
             block_time += additional_time;
 
-        // Accumulate time (same pattern as legacy)
-        time += block_time;
-        gcode_time.cache += block_time;
-
-        // Don't calculate travel of start gcode into travel time
-        if (!block.flags.prepare_stage || block.move_type != EMoveType::Travel)
-            moves_time[static_cast<size_t>(block.move_type)] += block_time;
-
-        roles_time[static_cast<size_t>(block.role)] += block_time;
-
-        // Update layer times
-        if (block.layer_id >= layers_time.size()) {
-            const size_t curr_size = layers_time.size();
-            layers_time.resize(block.layer_id);
-            for (size_t j = curr_size; j < layers_time.size(); ++j) {
-                layers_time[j] = 0.0f;
-            }
-        }
-        layers_time[block.layer_id - 1] += block_time;
-
-        // Prepare time
-        if (block.flags.prepare_stage)
-            prepare_time += block_time;
-
-        // Cache G1 line times
-        g1_times_cache.push_back({ block.g1_line_id, block.remaining_internal_g1_lines, time });
-
-        // Update times for remaining time to printer stop placeholders
-        auto it_stop_time = std::lower_bound(stop_times.begin(), stop_times.end(), block.g1_line_id,
-            [](const StopTime& t, unsigned int value) { return t.g1_line_id < value; });
-        if (it_stop_time != stop_times.end() && it_stop_time->g1_line_id == block.g1_line_id)
-            it_stop_time->elapsed_time = time;
+        // Accumulate time into all categories (Deliverable 6: Integration)
+        accumulate_block_time(*this, block, block_time);
     }
 
     // Save end velocity of last processed block for next batch
@@ -2207,11 +2312,20 @@ void GCodeProcessor::finalize(bool post_process)
         }
     }
 
-    // process the time blocks
+    // process the time blocks (Deliverable 6: Integration)
+    // This finalizes all remaining blocks for both Legacy and Klipper modes
     for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i) {
         TimeMachine& machine = m_time_processor.machines[i];
         TimeMachine::CustomGCodeTime& gcode_time = machine.gcode_time;
+
+        // calculate_time() with default parameters (keep_last_n_blocks=0)
+        // processes all remaining blocks and clears the buffer.
+        // For Klipper mode, this runs the two-pass planner on all blocks.
         machine.calculate_time();
+
+        // Verify time consistency in debug builds (Deliverable 6)
+        verify_time_consistency(machine);
+
         if (gcode_time.needed && gcode_time.cache != 0.0f)
             gcode_time.times.push_back({ CustomGCode::ColorChange, gcode_time.cache });
     }
@@ -6064,7 +6178,6 @@ void GCodeProcessor::register_g1_move(unsigned int g1_line_id)
 
 void GCodeProcessor::record_block_kinematics(const TimeBlock& block, PrintEstimatedStatistics::ETimeMode mode)
 {
-    (void)mode;
     auto it = m_g1_to_move_range.find(block.g1_line_id);
     if (it == m_g1_to_move_range.end())
         return;
@@ -6075,13 +6188,40 @@ void GCodeProcessor::record_block_kinematics(const TimeBlock& block, PrintEstima
         return;
     }
 
-    // Start with time estimation trapezoid values
-    float entry_speed = block.feedrate_profile.entry;
-    float exit_speed = block.feedrate_profile.exit;
-    float peak_speed = block.trapezoid.cruise_feedrate;
-    float accelerate_distance = block.trapezoid.accelerate_until;
-    float decelerate_distance = std::max(0.0f, block.distance - block.trapezoid.decelerate_after);
-    float cruise_distance = block.trapezoid.cruise_distance();
+    // Deliverable 6: Use Klipper resolved velocities when available
+    // Check if this block was processed by Klipper mode by looking at the machine's estimator mode
+    const TimeMachine& machine = m_time_processor.machines[static_cast<size_t>(mode)];
+    bool use_klipper_velocities = (machine.estimator_mode == EstimatorMode::Klipper) &&
+                                   (block.klipper.resolved_cruise_v > 0.0f);
+
+    float entry_speed, exit_speed, peak_speed;
+    float accelerate_distance, decelerate_distance, cruise_distance;
+
+    if (use_klipper_velocities) {
+        // Use resolved velocities from Klipper two-pass planner
+        entry_speed = block.klipper.resolved_start_v;
+        exit_speed = block.klipper.resolved_end_v;
+        peak_speed = block.klipper.resolved_cruise_v;
+
+        // Calculate trapezoid distances from resolved velocities
+        float accel = block.acceleration;
+        if (accel > 0.0001f) {
+            accelerate_distance = (peak_speed * peak_speed - entry_speed * entry_speed) / (2.0f * accel);
+            decelerate_distance = (peak_speed * peak_speed - exit_speed * exit_speed) / (2.0f * accel);
+        } else {
+            accelerate_distance = 0.0f;
+            decelerate_distance = 0.0f;
+        }
+        cruise_distance = std::max(0.0f, block.distance - accelerate_distance - decelerate_distance);
+    } else {
+        // Legacy mode: use traditional trapezoid values
+        entry_speed = block.feedrate_profile.entry;
+        exit_speed = block.feedrate_profile.exit;
+        peak_speed = block.trapezoid.cruise_feedrate;
+        accelerate_distance = block.trapezoid.accelerate_until;
+        decelerate_distance = std::max(0.0f, block.distance - block.trapezoid.decelerate_after);
+        cruise_distance = block.trapezoid.cruise_distance();
+    }
 
     // For preview, apply Klipper-specific constraints that don't affect time estimation.
     // First apply SCV-limited entry speed if applicable.
