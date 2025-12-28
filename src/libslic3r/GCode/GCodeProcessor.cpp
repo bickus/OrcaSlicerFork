@@ -629,27 +629,34 @@ void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float 
         }
 
         // Start velocity is constrained by previous end and junction limit
-        float start_v2 = std::min(prev_end_v2, block.klipper.max_start_v2);
+        // Use max_smoothed_v2 which incorporates both the geometric junction limit
+        // AND the smoothed acceleration constraint from minimum_cruise_ratio
+        // max_smoothed_v2 = min(max_start_v2, smoothed_forward_limit, smoothed_backward_limit)
+        float start_v2 = std::min(prev_end_v2, block.klipper.max_smoothed_v2);
+
+        // For first block or blocks where smoothed constraint is 0, fall back to max_start_v2
+        if (block.klipper.max_smoothed_v2 < 0.0001f) {
+            start_v2 = std::min(prev_end_v2, block.klipper.max_start_v2);
+        }
 
         // Calculate achievable cruise velocity using full acceleration
+        // Note: We use max_dv2 (not smoothed_dv2) for cruise calculation
+        // The smoothed constraint only affects junction velocities, not acceleration within a move
         float cruise_v2 = std::min(
             block.klipper.max_cruise_v2,
             start_v2 + block.klipper.max_dv2
         );
 
-        // Apply smoothed velocity constraint from minimum_cruise_ratio
-        // max_smoothed_v2 represents the maximum velocity achievable considering
-        // the smoothed acceleration constraint (accel_to_decel) from previous moves
-        // This ensures the printer maintains cruise velocity for minimum_cruise_ratio
-        // fraction of each move
-        if (block.klipper.max_smoothed_v2 > 0.0f) {
-            cruise_v2 = std::min(cruise_v2, block.klipper.max_smoothed_v2);
-        }
-
         // Get next block's start velocity limit for end velocity
+        // Use max_smoothed_v2 which incorporates the smoothed constraint
         float next_start_v2;
         if (i + 1 < blocks.size()) {
-            next_start_v2 = blocks[i + 1].klipper.max_start_v2;
+            const auto& next_block = blocks[i + 1];
+            next_start_v2 = next_block.klipper.max_smoothed_v2;
+            // Fall back to max_start_v2 if smoothed is near zero
+            if (next_start_v2 < 0.0001f) {
+                next_start_v2 = next_block.klipper.max_start_v2;
+            }
         } else {
             next_start_v2 = 0.0f;  // Last block ends at rest
         }
