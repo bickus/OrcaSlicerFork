@@ -1,14 +1,30 @@
 # Deliverable 7: Validation Complete (Final Report)
 ## Summary
-Comprehensive validation and debugging of the Klipper print time estimation implementation. **Nine bugs were found and fixed**, reducing the estimation error from +79% to approximately 0%.
-| Metric | Before Fixes | After Bug 1-6 | After Bug 7-8 | After Bug 9 |
-|--------|--------------|---------------|---------------|-------------|
-| Klipper Estimate | 11h18m | 5h54m | 6h4m | TBD (needs testing) |
+Comprehensive validation and debugging of the Klipper print time estimation implementation. **Nine bugs were identified**, with Bugs 1-6 successfully fixed. Bugs 7-9 relate to the smoothed velocity constraint ("delayed moves" mechanism) which remains **partially working but not fully accurate**.
+
+| Metric | Before Fixes | After Bug 1-6 | After Bug 7 | After Bug 8-9 |
+|--------|--------------|---------------|-------------|---------------|
+| Klipper Estimate | 11h18m | 5h54m | 5h58m | 6h26m |
 | Legacy Estimate | 7h15m | (unchanged) | (unchanged) | (unchanged) |
 | Actual Print Time | ~6h16m | ~6h16m | ~6h16m | ~6h16m |
-| Error vs Actual | +79% | -6% | -3% | TBD |
+| Error vs Actual | +79% | -6% | -5% | **+3%** |
 
-**Note:** Bug 7-9 fixes implement Klipper's "delayed moves" mechanism for proper smoothed velocity constraint handling.
+## Current Status: PARTIALLY WORKING
+The estimation is now within ~3-6% of actual time depending on configuration. The smoothed velocity constraint (minimum_cruise_ratio) implementation needs further refinement.
+
+### Key Observation for Future Agent
+| Configuration | Estimate | Error | Notes |
+|---------------|----------|-------|-------|
+| Peak detection only (no propagation) | 6h4m | -3% (12 min under) | Only peaks are constrained |
+| Full peak propagation to all moves | 6h26m | +3% (10 min over) | All moves constrained by nearest peak |
+| Target | 6h16m | 0% | Actual print time |
+
+**The solution lies between these two extremes.** The full propagation adds ~22 minutes, but we only need ~12 minutes more. This suggests the propagation logic is correct in principle but may be:
+1. Propagating to too many moves
+2. Using incorrect peak_cruise_v2 values
+3. Missing some nuance in how Klipper handles delayed moves
+
+**Note:** Bugs 7-9 attempted to implement Klipper's "delayed moves" mechanism for proper smoothed velocity constraint handling, but the current implementation overestimates.
 ## Validation Status: PASS
 ## Critical Bugs Found and Fixed
 ### Bug 1: Junction Deviation Acceleration Mismatch
@@ -164,8 +180,9 @@ The `max_smoothed_v2` field was being computed and accumulated in `calculate_kli
 - The effect is moderate since it only affects junction velocities, not cruise
 ---
 ### Bug 8: Peak Detection for Smoothed Velocity Constraint
-**Severity:** Moderate - Improves accuracy from ~6% to ~3% underestimation
+**Severity:** Moderate
 **Commit:** `96df31d4b7`
+**Status:** IMPLEMENTED but contributes to overestimation
 **Location:** `GCodeProcessor.cpp` - `klipper_backward_pass()` and `klipper_forward_pass()`
 
 **Root Cause:**
@@ -176,7 +193,7 @@ The smoothed velocity constraint was being applied uniformly, but Klipper's algo
 - At peaks, cruise velocity should be limited to `(smoothed_v2 + reachable_smoothed_v2) × 0.5`
 - Added `is_peak` and `peak_cruise_v2` fields to `KlipperFields` struct
 
-**Fix Applied:**
+**Implementation:**
 1. **Backward pass**: Added peak detection
    ```cpp
    if (smoothed_v2 < reachable_smoothed_v2 - 0.0001f) {
@@ -189,22 +206,26 @@ The smoothed velocity constraint was being applied uniformly, but Klipper's algo
    ```
 
 2. **Forward pass**: Apply peak constraint to cruise velocity
+
+**Result:** With peak detection only (no propagation), estimate = 6h4m (-3%)
 ---
 ### Bug 9: Kinematic Averaging and Peak Propagation
-**Severity:** Moderate - Further improves accuracy toward target
+**Severity:** Moderate
+**Commit:** `eb189b11f2`
+**Status:** IMPLEMENTED but causes overestimation (+3%)
 **Location:** `GCodeProcessor.cpp` - `klipper_backward_pass()` and `klipper_forward_pass()`
 
-**Root Cause:**
-Two issues remained:
+**Root Cause (Theory):**
+Two issues were identified:
 1. Peak moves weren't using kinematic averaging for cruise velocity
 2. Delayed (non-peak) moves weren't constrained by the nearest peak's cruise velocity
 
 **Technical Details:**
-According to Klipper's algorithm:
+According to Klipper's algorithm documentation:
 - For peak moves: `cruise_v2 = min((start_v2 + reachable_start_v2) × 0.5, max_cruise_v2, peak_cruise_v2)`
 - For delayed moves: `cruise_v2 = min(start_v2, peak_cruise_v2)` where `peak_cruise_v2` comes from the next peak in time
 
-**Fix Applied:**
+**Implementation:**
 1. **Added `reachable_start_v2` field**: Stores kinematic reachability from backward pass
 
 2. **Backward pass**: Added second loop to propagate `peak_cruise_v2` from peaks to delayed moves
@@ -232,7 +253,14 @@ According to Klipper's algorithm:
    }
    ```
 
-**Key Insight:** Delayed moves need to slow down for upcoming peaks. The peak_cruise_v2 is propagated backward in time so moves leading up to a peak are properly constrained.
+**Result:** With full propagation, estimate = 6h26m (+3%, 10 min over)
+
+**Analysis - WHY THE OVERESTIMATION:**
+The full peak propagation adds ~22 minutes but we only need ~12 minutes more. Possible causes:
+1. **Propagation direction may be wrong**: We propagate backward in the second loop (later blocks in time to earlier). But Klipper's algorithm uses a forward pass for delayed moves with a globally tracked peak_cruise_v2. The semantics may differ.
+2. **Kinematic averaging may be incorrect**: The `reachable_start_v2` is computed from backward pass, but in forward pass we use a different `start_v2` (from prev_end_v2). The averaging may be mixing incompatible values.
+3. **Over-identification of peaks**: We may be flagging too many moves as peaks, causing excessive constraints.
+4. **Missing "flush" mechanism**: Klipper's algorithm has a `flush_count` for incremental processing that we don't implement.
 ---
 ## Verification Checklist
 | Item | Status | Notes |
@@ -300,22 +328,121 @@ max_smoothed_v2 = min(max_start_v2, prev_max_smoothed_v2 + prev_smoothed_dv2)
 4. `dd3c7f3fda` - Fix per-feature SCV not being used in junction calculation
 5. `b71b18ff95` - Fix critical centripetal formula bug: was using cot(θ/2) instead of tan(θ/2)
 ---
-## Remaining Considerations
-### Potential Minor Issues
-1. **Delayed moves mechanism**: The current implementation uses a simplified smoothed velocity constraint. The full Klipper "delayed moves" mechanism is more complex but the current approach should be accurate within 1-2%.
-2. **Input shaper**: Klipper's input shaper can affect actual print times but is not modeled in the estimator.
-3. **Pressure advance**: May affect extrusion timing slightly.
-### Recommendations for Future Work
-1. Add validation tests with known G-code patterns and expected times
-2. Consider adding per-layer time breakdown comparison with actual print logs
-3. Monitor user feedback on accuracy after these fixes
+## Remaining Work: Smoothed Velocity Constraint Accuracy
+
+### Current State
+The estimation is within ~3-6% of actual time, but the delayed moves mechanism is not fully correct:
+- **Without peak propagation**: 6h4m (3% under) - only peak moves are constrained
+- **With full peak propagation**: 6h26m (3% over) - all moves constrained by nearest peak
+- **Target**: 6h16m (actual print time)
+
+### Investigation Needed
+
+#### 1. Study Klipper's Actual Implementation
+The algorithm in `doc/proper_print_time/KLIPPER_PRINT_TIME_ESTIMATION_LOGIC.md` (Section 6.3-6.4) may be incomplete. Study Klipper's actual source code:
+- `klippy/toolhead.py` - main velocity planning
+- `klippy/chelper/trapq.c` - low-level trapezoid queue
+
+#### 2. Consider Alternative Approaches
+
+**Option A: Partial Propagation**
+Only propagate to moves within N moves of a peak:
+```cpp
+// Count moves since last peak
+int moves_since_peak = 0;
+float active_peak_cruise_v2 = std::numeric_limits<float>::max();
+for (backward iteration) {
+    if (is_peak) {
+        active_peak_cruise_v2 = peak_cruise_v2;
+        moves_since_peak = 0;
+    } else if (moves_since_peak < PROPAGATION_LIMIT) {
+        block.peak_cruise_v2 = active_peak_cruise_v2;
+        moves_since_peak++;
+    }
+}
+```
+Try different values of PROPAGATION_LIMIT to find the sweet spot.
+
+**Option B: Blended Propagation**
+Apply peak constraint with decay:
+```cpp
+float blend_factor = 1.0f / (1.0f + distance_from_peak * DECAY_RATE);
+effective_peak_cruise = lerp(max_cruise_v2, peak_cruise_v2, blend_factor);
+```
+
+**Option C: Forward Pass Propagation**
+Instead of propagating in backward pass, track peak_cruise_v2 in forward pass:
+```cpp
+// In forward pass
+float active_peak_cruise_v2 = std::numeric_limits<float>::max();
+for (forward iteration) {
+    if (next_block.is_peak) {
+        // Look ahead to next peak and use its constraint
+        active_peak_cruise_v2 = next_block.peak_cruise_v2;
+    }
+    if (not is_peak) {
+        cruise_v2 = min(cruise_v2, active_peak_cruise_v2);
+    }
+}
+```
+
+**Option D: Check Peak Detection Threshold**
+Current threshold is 0.0001f. Try adjusting:
+```cpp
+if (smoothed_v2 < reachable_smoothed_v2 - THRESHOLD) { // is_peak = true }
+```
+A higher threshold = fewer peaks = less propagation impact.
+
+#### 3. Debug Output
+Add debug logging to understand what's happening:
+```cpp
+if (block.klipper.is_peak) {
+    BOOST_LOG_TRIVIAL(debug) << "Peak at block " << idx
+        << " smoothed=" << smoothed_v2
+        << " reachable=" << reachable_smoothed_v2
+        << " peak_cruise=" << block.klipper.peak_cruise_v2;
+}
+```
+
+#### 4. Validate with Klipper Estimator
+The design doc mentions "Klipper Estimator" achieves ~1-2 minute accuracy. Consider:
+- Running the same G-code through Klipper Estimator
+- Comparing intermediate values (per-move velocities)
+- Identifying where our values diverge
+
+### Files to Modify
+- `src/libslic3r/GCode/GCodeProcessor.cpp` - `klipper_backward_pass()` and `klipper_forward_pass()`
+- `src/libslic3r/GCode/GCodeProcessor.hpp` - `KlipperFields` struct if new fields needed
+
+### Test Reference
+- Test G-code produces actual print time of ~6h16m27s
+- `minimum_cruise_ratio = 0.25` (accel_to_decel = 75% of acceleration)
+- Accurate estimation should be within 1-2 minutes (~0.5%)
+
+### Other Considerations
+1. **Input shaper**: Klipper's input shaper can affect actual print times but is not modeled in the estimator.
+2. **Pressure advance**: May affect extrusion timing slightly.
+3. **Toolhead start delay**: Klipper has a 0.25s toolhead start delay that may not be modeled.
 ---
 ## Summary
 The root cause of the ~79% overestimation was primarily **Bug 6 (centripetal formula inversion)**. This bug caused the estimator to think it needed to slow down significantly at every gentle turn, which dramatically inflated the time for fast features like infill that have many small direction changes.
 
-After Bugs 1-6 were fixed, the estimate was 5h54m vs actual 6h16m (~6% underestimation). **Bug 7 (smoothed velocity not being used)** was identified as the cause - the `minimum_cruise_ratio` setting was not being applied because the computed `max_smoothed_v2` was never used in velocity planning.
+After Bugs 1-6 were fixed, the estimate was 5h54m vs actual 6h16m (~6% underestimation). Bugs 7-9 attempted to address the remaining gap by implementing Klipper's smoothed velocity constraint ("delayed moves" mechanism):
 
-After fixing Bug 7 to properly apply the smoothed velocity constraint, the estimate should be within ~0-2% of actual print time.
+| Bug | Fix Applied | Result |
+|-----|-------------|--------|
+| Bug 7 | Use max_smoothed_v2 for junction velocities | 5h58m (-5%) |
+| Bug 8 | Peak detection for smoothed constraint | 6h4m (-3%) |
+| Bug 9 | Full peak propagation to delayed moves | 6h26m (+3%) |
+
+**Current State:** The implementation is within ~3% of actual time, but full accuracy requires finding the correct balance in peak propagation. The solution likely involves either:
+1. Partial propagation (limit to N moves from peak)
+2. Decay-based propagation
+3. Different propagation direction (forward instead of backward)
+4. Threshold adjustment for peak detection
+
+**Next Steps for Future Agent:** See "Remaining Work: Smoothed Velocity Constraint Accuracy" section above for detailed investigation guidance.
 ---
 **Validation performed by:** Claude Code Agent
 **Date:** 2025-12-28
+**Last Updated:** 2025-12-28
