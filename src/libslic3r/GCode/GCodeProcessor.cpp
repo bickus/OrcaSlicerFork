@@ -284,12 +284,18 @@ float calculate_extruder_junction_v2(
 // Calculate all junction limits and set max_start_v2 for a block
 // prev_block: the preceding block (nullptr for first block)
 // curr_block: the current block being processed
-// junction_deviation: Klipper junction deviation parameter
+// square_corner_velocity: Klipper SCV parameter (used to compute junction_deviation per-block)
 // instant_corner_velocity: Klipper instant corner velocity parameter
+//
+// IMPORTANT: In Klipper, junction_deviation is recalculated when acceleration changes.
+// The formula junction_deviation = scv² × 0.41421356 / acceleration means that the
+// junction velocity calculation v² = r × junction_deviation × acceleration simplifies
+// to v² = r × scv² × 0.41421356, independent of the acceleration value.
+// We achieve this by computing junction_deviation per-block using block.acceleration.
 void calculate_klipper_junction(
     const GCodeProcessor::TimeBlock* prev_block,
     GCodeProcessor::TimeBlock& curr_block,
-    float junction_deviation,
+    float square_corner_velocity,
     float instant_corner_velocity)
 {
     // First block starts from rest
@@ -312,18 +318,42 @@ void calculate_klipper_junction(
         prev_block->klipper.rate_xyz,
         curr_block.klipper.rate_xyz);
 
+    // Compute junction_deviation for current block using its acceleration
+    // This matches Klipper's behavior where junction_deviation is recalculated
+    // when acceleration changes (via M204 or SET_VELOCITY_LIMIT)
+    float curr_junction_deviation = compute_junction_deviation(
+        square_corner_velocity, curr_block.acceleration);
+    float prev_junction_deviation = compute_junction_deviation(
+        square_corner_velocity, prev_block->acceleration);
+
     // Calculate junction deviation limit
+    // Using the block's own junction_deviation (computed from its acceleration)
     float jd_v2 = calculate_junction_deviation_v2(
         cos_theta,
-        junction_deviation,
-        curr_block.acceleration,  // Use block's acceleration
+        curr_junction_deviation,
+        curr_block.acceleration,
         std::min(prev_block->klipper.max_cruise_v2, curr_block.klipper.max_cruise_v2));
+
+    // Also consider previous block's junction deviation limit
+    float jd_v2_prev = calculate_junction_deviation_v2(
+        cos_theta,
+        prev_junction_deviation,
+        prev_block->acceleration,
+        std::min(prev_block->klipper.max_cruise_v2, curr_block.klipper.max_cruise_v2));
+    jd_v2 = std::min(jd_v2, jd_v2_prev);
 
     // Calculate centripetal limit
     float cent_v2 = calculate_centripetal_v2(
         curr_block.distance,  // Use current block's distance
         curr_block.acceleration,
         cos_theta);
+
+    // Also calculate centripetal for previous block
+    float cent_v2_prev = calculate_centripetal_v2(
+        prev_block->distance,
+        prev_block->acceleration,
+        cos_theta);
+    cent_v2 = std::min(cent_v2, cent_v2_prev);
 
     // Calculate extruder limit
     float ext_v2 = calculate_extruder_junction_v2(
@@ -1649,19 +1679,27 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
             float junction_deviation = static_cast<float>(get_option_value(
                 m_time_processor.machine_limits.machine_max_junction_deviation, i));
 
-            // If not set (0 or very small), compute from jerk/SCV values
+            // Get jerk values - these ARE SCV for Klipper
+            float scv = std::min(
+                static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_x, i)),
+                static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_y, i))
+            );
+
+            // If junction_deviation not set directly, compute from SCV
             if (junction_deviation < 0.0001f) {
-                // Get jerk values - these ARE SCV for Klipper
-                float scv = std::min(
-                    static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_x, i)),
-                    static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_y, i))
-                );
                 junction_deviation = compute_junction_deviation(scv, max_acceleration);
+            } else {
+                // If junction_deviation was set directly, derive SCV from it
+                // junction_deviation = scv² * 0.41421356 / max_accel
+                // scv² = junction_deviation * max_accel / 0.41421356
+                constexpr float SQRT2_MINUS_1 = 0.41421356f;
+                scv = std::sqrt(junction_deviation * max_acceleration / SQRT2_MINUS_1);
             }
 
             float extruder_icv = static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_e, i));
 
             m_time_processor.machines[i].klipper_state.junction_deviation = junction_deviation;
+            m_time_processor.machines[i].klipper_state.square_corner_velocity = scv;  // Store SCV for per-block junction_deviation
             m_time_processor.machines[i].klipper_state.accel_to_decel =
                 compute_accel_to_decel(max_acceleration, m_time_processor.machines[i].minimum_cruise_ratio);
             m_time_processor.machines[i].klipper_state.instant_corner_velocity = extruder_icv;
@@ -4085,9 +4123,11 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
                 block.acceleration = limited_accel;
                 block.klipper.max_dv2 = 2.0f * limited_accel * block.distance;
 
-                // Compute smoothed_dv2 using accel_to_decel
-                block.klipper.smoothed_dv2 = 2.0f *
-                    machine.klipper_state.accel_to_decel * block.distance;
+                // Compute smoothed_dv2 using accel_to_decel computed per-block
+                // In Klipper, accel_to_decel is recalculated when acceleration changes
+                float block_accel_to_decel = compute_accel_to_decel(
+                    limited_accel, machine.minimum_cruise_ratio);
+                block.klipper.smoothed_dv2 = 2.0f * block_accel_to_decel * block.distance;
             }
 
             // Get previous block for junction calculation
@@ -4096,9 +4136,9 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
                 prev_block = &machine.blocks.back();
             }
 
-            // Calculate junction velocity
+            // Calculate junction velocity using SCV (junction_deviation is computed per-block)
             calculate_klipper_junction(prev_block, block,
-                machine.klipper_state.junction_deviation,
+                machine.klipper_state.square_corner_velocity,
                 machine.klipper_state.instant_corner_velocity);
         }
 
@@ -4668,9 +4708,11 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
                 block.acceleration = limited_accel;
                 block.klipper.max_dv2 = 2.0f * limited_accel * block.distance;
 
-                // Compute smoothed_dv2 using accel_to_decel
-                block.klipper.smoothed_dv2 = 2.0f *
-                    machine.klipper_state.accel_to_decel * block.distance;
+                // Compute smoothed_dv2 using accel_to_decel computed per-block
+                // In Klipper, accel_to_decel is recalculated when acceleration changes
+                float block_accel_to_decel = compute_accel_to_decel(
+                    limited_accel, machine.minimum_cruise_ratio);
+                block.klipper.smoothed_dv2 = 2.0f * block_accel_to_decel * block.distance;
             }
 
             // Get previous block for junction calculation
@@ -4679,9 +4721,9 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
                 prev_block = &machine.blocks.back();
             }
 
-            // Calculate junction velocity
+            // Calculate junction velocity using SCV (junction_deviation is computed per-block)
             calculate_klipper_junction(prev_block, block,
-                machine.klipper_state.junction_deviation,
+                machine.klipper_state.square_corner_velocity,
                 machine.klipper_state.instant_corner_velocity);
         }
 

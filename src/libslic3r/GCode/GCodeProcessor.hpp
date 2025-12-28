@@ -569,6 +569,7 @@ class Print;
                 float junction_deviation{0.0f};      // Derived from jerk²/max_accel
                 float accel_to_decel{50.0f};         // Derived from cruise_ratio
                 float instant_corner_velocity{1.0f}; // From machine_max_jerk_e
+                float square_corner_velocity{5.0f};  // SCV for per-block junction_deviation calculation
 
                 // Indicates if Klipper state is properly initialized
                 bool initialized{false};
