@@ -204,29 +204,49 @@ float calculate_junction_cos_theta(const Vec3f& prev_rate, const Vec3f& curr_rat
 
 // Calculate max junction velocity² from junction deviation
 // This is the primary junction velocity limit in Klipper
+//
+// IMPORTANT: cos_theta here is the NEGATED dot product of direction vectors:
+//   cos_theta = -1: same direction (moves are colinear, continuing straight)
+//   cos_theta = +1: opposite directions (180° reversal/turn-around)
+//   cos_theta =  0: perpendicular (90° turn)
 float calculate_junction_deviation_v2(
     float cos_theta,
     float junction_deviation,
     float acceleration,
     float max_cruise_v2)
 {
-    // Nearly co-linear moves (< 1 degree angle)
-    constexpr float COS_NEARLY_COLINEAR = 0.999847695f;  // cos(1°)
-    if (cos_theta >= COS_NEARLY_COLINEAR) {
-        return max_cruise_v2;
+    constexpr float COS_THRESHOLD = 0.999847695f;  // cos(1°)
+
+    // Nearly co-linear moves (same direction, < 1 degree deviation)
+    // cos_theta <= -0.9998 means directions are nearly identical
+    if (cos_theta <= -COS_THRESHOLD) {
+        return max_cruise_v2;  // No junction slowdown needed
     }
 
-    // Calculate sin and cos of half-angle
-    // Using half-angle formulas:
-    // sin(θ/2) = sqrt((1 - cos(θ)) / 2)
-    // cos(θ/2) = sqrt((1 + cos(θ)) / 2)
-    float sin_theta_d2 = std::sqrt(0.5f * (1.0f - cos_theta));
-    float cos_theta_d2 = std::sqrt(0.5f * (1.0f + cos_theta));
+    // Near 180° reversal - must stop at junction
+    // cos_theta >= +0.9998 means directions are nearly opposite
+    if (cos_theta >= COS_THRESHOLD) {
+        return 0.0f;  // Must stop at junction
+    }
 
-    // Avoid division by zero for sharp corners
+    // Calculate sin of half-angle using half-angle formula:
+    // sin(θ/2) = sqrt((1 - cos(θ)) / 2)
+    // Note: with negated cos_theta, for same-direction (cos_theta=-1):
+    //   sin_theta_d2 = sqrt((1-(-1))/2) = sqrt(1) = 1
+    // For 90° turn (cos_theta=0):
+    //   sin_theta_d2 = sqrt(0.5) = 0.707
+    // For reversal (cos_theta=+1):
+    //   sin_theta_d2 = sqrt(0) = 0
+    float sin_theta_d2 = std::sqrt(0.5f * (1.0f - cos_theta));
+
+    // Avoid division by zero for same-direction (sin_theta_d2 ≈ 1)
     if (sin_theta_d2 >= 0.999f) {
-        // Very sharp corner (> ~160 degrees) - use minimum velocity
-        return acceleration * junction_deviation;
+        return max_cruise_v2;  // Nearly same direction
+    }
+
+    // Avoid division by zero for reversal (sin_theta_d2 ≈ 0)
+    if (sin_theta_d2 <= 0.001f) {
+        return 0.0f;  // Nearly full reversal
     }
 
     // Junction deviation formula from Klipper
@@ -238,24 +258,38 @@ float calculate_junction_deviation_v2(
 
 // Calculate max junction velocity² from centripetal acceleration limit
 // This prevents excessive lateral acceleration on curved paths
+//
+// IMPORTANT: cos_theta here is the NEGATED dot product:
+//   cos_theta = -1: same direction (no turn)
+//   cos_theta = +1: opposite directions (180° reversal)
+//   cos_theta =  0: 90° turn
 float calculate_centripetal_v2(
     float move_distance,
     float acceleration,
     float cos_theta)
 {
-    // Near-reversal moves have zero centripetal limit
-    constexpr float COS_NEAR_REVERSAL = -0.999f;
-    if (cos_theta <= COS_NEAR_REVERSAL) {
+    // Same direction moves - no centripetal limit needed
+    // cos_theta <= -0.999 means nearly same direction
+    if (cos_theta <= -0.999f) {
+        return std::numeric_limits<float>::max();
+    }
+
+    // Near-reversal moves - must stop (zero velocity limit)
+    // cos_theta >= +0.999 means nearly opposite directions
+    if (cos_theta >= 0.999f) {
         return 0.0f;
     }
 
-    // sin(theta) from cos(theta)
+    // sin(theta) from cos(theta) - always positive for theta in [0, 180°]
     float sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
 
-    // Avoid division by zero for co-linear moves
+    // Denominator: 1 - cos_theta
+    // For cos_theta = -1 (same dir): denom = 2
+    // For cos_theta = 0 (90° turn): denom = 1
+    // For cos_theta = +1 (reversal): denom = 0
     float denom = 1.0f - cos_theta;
     if (denom < 0.0001f) {
-        return std::numeric_limits<float>::max();  // No centripetal limit
+        return 0.0f;  // Near reversal - must stop
     }
 
     // Centripetal formula: v² = 0.5 * d * a * sin(θ) / (1 - cos(θ))
@@ -508,6 +542,7 @@ struct DelayedMove {
 
 // Backward pass: propagate velocity limits from end to start
 // Sets max_start_v2 and max_cruise_v2 for each block
+// Uses smoothed_dv2 (based on accel_to_decel and cruise_ratio) for velocity changes
 void klipper_backward_pass(
     std::vector<GCodeProcessor::TimeBlock>& blocks,
     std::vector<DelayedMove>& delayed_moves)
@@ -534,9 +569,18 @@ void klipper_backward_pass(
             end_v2 = blocks[idx + 1].klipper.max_start_v2;
         }
 
-        // Calculate max start velocity from end velocity and acceleration
+        // Calculate max start velocity from end velocity using smoothed_dv2
+        // smoothed_dv2 = 2 * accel_to_decel * distance
+        // where accel_to_decel = max_accel * (1 - cruise_ratio)
+        // This makes cruise_ratio affect velocity propagation
+        float dv2_for_propagation = block.klipper.smoothed_dv2;
+        // Fallback to max_dv2 if smoothed_dv2 is not set (shouldn't happen)
+        if (dv2_for_propagation <= 0.0f) {
+            dv2_for_propagation = block.klipper.max_dv2;
+        }
+
         // Using v_start² = v_end² + 2*a*d (note: + because we're going backward)
-        float max_start_from_end = end_v2 + block.klipper.max_dv2;
+        float max_start_from_end = end_v2 + dv2_for_propagation;
 
         // Start velocity is minimum of junction limit and kinematic limit
         float new_start_v2 = std::min(block.klipper.max_start_v2, max_start_from_end);
@@ -554,6 +598,7 @@ void klipper_backward_pass(
 // Forward pass: finalize velocities from start to end
 // This resolves delayed moves and sets resolved_* fields
 // initial_velocity: velocity at start of batch (for batch continuity)
+// Uses smoothed_dv2 (based on accel_to_decel and cruise_ratio) for velocity changes
 void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float initial_velocity = 0.0f)
 {
     if (blocks.empty()) return;
@@ -575,10 +620,18 @@ void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float 
         // Start velocity is constrained by previous end and junction limit
         float start_v2 = std::min(prev_end_v2, block.klipper.max_start_v2);
 
+        // Use smoothed_dv2 for velocity change calculation
+        // smoothed_dv2 = 2 * accel_to_decel * distance
+        // where accel_to_decel = max_accel * (1 - cruise_ratio)
+        float dv2_for_accel = block.klipper.smoothed_dv2;
+        if (dv2_for_accel <= 0.0f) {
+            dv2_for_accel = block.klipper.max_dv2;  // Fallback
+        }
+
         // Calculate achievable cruise velocity
         float cruise_v2 = std::min(
             block.klipper.max_cruise_v2,
-            start_v2 + block.klipper.max_dv2
+            start_v2 + dv2_for_accel
         );
 
         // Get next block's start velocity limit for end velocity
@@ -597,15 +650,16 @@ void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float 
         end_v2 = std::min(end_v2, max_end_from_cruise);
 
         // Also verify we can decelerate to end within the block distance
-        // Using v_end² = v_cruise² - 2*a*d_decel
-        // d_decel = (v_cruise² - v_end²) / (2*a)
-        // If d_decel > block.distance, we need to reduce cruise
-        float decel_accel = block.acceleration;
-        if (decel_accel > 0.0001f) {
-            float needed_decel_dist = (cruise_v2 - end_v2) / (2.0f * decel_accel);
+        // Use smoothed accel (accel_to_decel) for deceleration calculation
+        float accel_to_decel = block.acceleration;  // Default to full acceleration
+        if (block.distance > 0.0001f && block.klipper.smoothed_dv2 > 0.0f) {
+            accel_to_decel = block.klipper.smoothed_dv2 / (2.0f * block.distance);
+        }
+        if (accel_to_decel > 0.0001f) {
+            float needed_decel_dist = (cruise_v2 - end_v2) / (2.0f * accel_to_decel);
             if (needed_decel_dist > block.distance) {
                 // Reduce end velocity or cruise velocity
-                end_v2 = cruise_v2 - 2.0f * decel_accel * block.distance;
+                end_v2 = cruise_v2 - 2.0f * accel_to_decel * block.distance;
                 end_v2 = std::max(end_v2, 0.0f);
             }
         }
