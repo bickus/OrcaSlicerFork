@@ -263,37 +263,44 @@ float calculate_junction_deviation_v2(
 //   cos_theta = -1: same direction (no turn)
 //   cos_theta = +1: opposite directions (180° reversal)
 //   cos_theta =  0: 90° turn
+//
+// Formula from Klipper: centripetal_v2 = 0.5 × distance × tan(θ/2) × acceleration
+// where tan(θ/2) = sqrt((1 - cos_theta) / (1 + cos_theta))
 float calculate_centripetal_v2(
     float move_distance,
     float acceleration,
     float cos_theta)
 {
-    // Same direction moves - no centripetal limit needed
-    // cos_theta <= -0.999 means nearly same direction
-    if (cos_theta <= -0.999f) {
-        return std::numeric_limits<float>::max();
-    }
-
     // Near-reversal moves - must stop (zero velocity limit)
     // cos_theta >= +0.999 means nearly opposite directions
+    // tan(θ/2) → 0 as we approach reversal
     if (cos_theta >= 0.999f) {
         return 0.0f;
     }
 
-    // sin(theta) from cos(theta) - always positive for theta in [0, 180°]
-    float sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
-
-    // Denominator: 1 - cos_theta
-    // For cos_theta = -1 (same dir): denom = 2
-    // For cos_theta = 0 (90° turn): denom = 1
-    // For cos_theta = +1 (reversal): denom = 0
-    float denom = 1.0f - cos_theta;
-    if (denom < 0.0001f) {
-        return 0.0f;  // Near reversal - must stop
+    // Same direction moves - no centripetal limit needed
+    // cos_theta <= -0.999 means nearly same direction
+    // tan(θ/2) → ∞ as we approach same direction
+    if (cos_theta <= -0.999f) {
+        return std::numeric_limits<float>::max();
     }
 
-    // Centripetal formula: v² = 0.5 * d * a * sin(θ) / (1 - cos(θ))
-    return 0.5f * move_distance * acceleration * sin_theta / denom;
+    // Calculate tan(θ/2) = sqrt((1 - cos_theta) / (1 + cos_theta))
+    // For cos_theta = 0 (90° turn): tan(45°) = 1
+    // For cos_theta = -0.707 (45° turn): tan(22.5°) ≈ 0.414
+    // For cos_theta = +0.707 (135° turn): tan(67.5°) ≈ 2.414
+    float one_minus_cos = 1.0f - cos_theta;
+    float one_plus_cos = 1.0f + cos_theta;
+
+    // Protect against division by zero (same direction case)
+    if (one_plus_cos < 0.0001f) {
+        return std::numeric_limits<float>::max();
+    }
+
+    float tan_theta_d2 = std::sqrt(one_minus_cos / one_plus_cos);
+
+    // Centripetal formula: v² = 0.5 × distance × tan(θ/2) × acceleration
+    return 0.5f * move_distance * acceleration * tan_theta_d2;
 }
 
 // Calculate max junction velocity² from extruder rate change limit
@@ -402,11 +409,9 @@ void calculate_klipper_junction(
     max_start_v2 = std::min(max_start_v2, prev_block->klipper.max_cruise_v2);
     max_start_v2 = std::min(max_start_v2, curr_block.klipper.max_cruise_v2);
 
-    // CRITICAL: Also limit by what the previous move can kinematically reach
-    // This propagates the acceleration constraint forward
-    // max_start_v2 <= prev_max_start_v2 + prev_max_dv2
-    float prev_kinematic_limit = prev_block->klipper.max_start_v2 + prev_block->klipper.max_dv2;
-    max_start_v2 = std::min(max_start_v2, prev_kinematic_limit);
+    // Note: The constraint (prev_max_start_v2 + prev_max_dv2) is handled by the
+    // forward pass, which computes actual achievable velocities considering
+    // what the previous move can accelerate to.
 
     curr_block.klipper.max_start_v2 = max_start_v2;
 
