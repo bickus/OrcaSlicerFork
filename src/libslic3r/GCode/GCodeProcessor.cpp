@@ -177,9 +177,11 @@ void init_klipper_fields(GCodeProcessor::TimeBlock& block) {
     block.klipper.smoothed_dv2 = 0.0f;
     block.klipper.max_start_v2 = 0.0f;
     block.klipper.max_smoothed_v2 = 0.0f;
+    block.klipper.peak_cruise_v2 = 0.0f;
     block.klipper.junction_deviation = 0.0f;
     block.klipper.is_kinematic = true;
     block.klipper.has_xy_motion = true;
+    block.klipper.is_peak = false;
     block.klipper.resolved_start_v = 0.0f;
     block.klipper.resolved_cruise_v = 0.0f;
     block.klipper.resolved_end_v = 0.0f;
@@ -597,13 +599,29 @@ void klipper_backward_pass(
         // Backward propagation of smoothed velocity constraint
         // What velocity can we have at this block considering smoothed deceleration ahead?
         float reachable_smoothed_v2 = next_smoothed_v2 + block.klipper.smoothed_dv2;
-        float backward_smoothed_v2 = std::min(block.klipper.max_smoothed_v2, reachable_smoothed_v2);
+        float smoothed_v2 = std::min(block.klipper.max_smoothed_v2, reachable_smoothed_v2);
+
+        // Peak detection: check if smoothed constraint is binding at this move
+        // When smoothed_v2 < reachable_smoothed_v2, this move constrains the velocity
+        // (i.e., we can't reach full smoothed velocity due to the junction limit)
+        if (smoothed_v2 < reachable_smoothed_v2 - 0.0001f) {
+            block.klipper.is_peak = true;
+            // At a peak, cruise velocity is limited to the average of constraints
+            // This matches Klipper's "delayed moves" mechanism
+            block.klipper.peak_cruise_v2 = std::min(
+                block.klipper.max_cruise_v2,
+                (smoothed_v2 + reachable_smoothed_v2) * 0.5f
+            );
+        } else {
+            block.klipper.is_peak = false;
+            block.klipper.peak_cruise_v2 = block.klipper.max_cruise_v2;
+        }
 
         // Update max_smoothed_v2 to be the minimum of forward and backward constraints
         // This ensures the smoothed constraint is respected in both directions
-        block.klipper.max_smoothed_v2 = backward_smoothed_v2;
+        block.klipper.max_smoothed_v2 = smoothed_v2;
 
-        next_smoothed_v2 = backward_smoothed_v2;
+        next_smoothed_v2 = smoothed_v2;
     }
 }
 
@@ -646,6 +664,14 @@ void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float 
             block.klipper.max_cruise_v2,
             start_v2 + block.klipper.max_dv2
         );
+
+        // Apply peak cruise velocity constraint
+        // When the smoothed constraint is binding (is_peak), limit cruise velocity
+        // This matches Klipper's "delayed moves" mechanism where peak moves have
+        // their cruise velocity limited to maintain the smoothed acceleration profile
+        if (block.klipper.is_peak && block.klipper.peak_cruise_v2 > 0.0f) {
+            cruise_v2 = std::min(cruise_v2, block.klipper.peak_cruise_v2);
+        }
 
         // Get next block's start velocity limit for end velocity
         // Use max_smoothed_v2 which incorporates the smoothed constraint

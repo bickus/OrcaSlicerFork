@@ -491,11 +491,13 @@ class Print;
 
                 float max_start_v2{0.0f};        // Max start velocity squared (from junction)
                 float max_smoothed_v2{0.0f};     // Max smoothed start velocity squared
+                float peak_cruise_v2{0.0f};      // Peak cruise velocity limit (set when smoothed constraint is binding)
 
                 float junction_deviation{0.0f};  // Junction deviation for this move
 
                 bool is_kinematic{true};         // false for E-only moves
                 bool has_xy_motion{true};        // false for Z-only or E-only moves
+                bool is_peak{false};             // True if smoothed constraint is binding at this move
 
                 // Resolved velocities (set by two-pass planner)
                 float resolved_start_v{0.0f};
