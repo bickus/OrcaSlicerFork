@@ -541,8 +541,7 @@ struct DelayedMove {
 };
 
 // Backward pass: propagate velocity limits from end to start
-// Sets max_start_v2 and max_cruise_v2 for each block
-// Uses smoothed_dv2 (based on accel_to_decel and cruise_ratio) for velocity changes
+// Sets max_start_v2 based on kinematic constraints using full acceleration
 void klipper_backward_pass(
     std::vector<GCodeProcessor::TimeBlock>& blocks,
     std::vector<DelayedMove>& delayed_moves)
@@ -569,36 +568,20 @@ void klipper_backward_pass(
             end_v2 = blocks[idx + 1].klipper.max_start_v2;
         }
 
-        // Calculate max start velocity from end velocity using smoothed_dv2
-        // smoothed_dv2 = 2 * accel_to_decel * distance
-        // where accel_to_decel = max_accel * (1 - cruise_ratio)
-        // This makes cruise_ratio affect velocity propagation
-        float dv2_for_propagation = block.klipper.smoothed_dv2;
-        // Fallback to max_dv2 if smoothed_dv2 is not set (shouldn't happen)
-        if (dv2_for_propagation <= 0.0f) {
-            dv2_for_propagation = block.klipper.max_dv2;
-        }
-
+        // Calculate max start velocity from end velocity using full acceleration
+        // max_dv2 = 2 * acceleration * distance
         // Using v_start² = v_end² + 2*a*d (note: + because we're going backward)
-        float max_start_from_end = end_v2 + dv2_for_propagation;
+        float max_start_from_end = end_v2 + block.klipper.max_dv2;
 
         // Start velocity is minimum of junction limit and kinematic limit
         float new_start_v2 = std::min(block.klipper.max_start_v2, max_start_from_end);
         block.klipper.max_start_v2 = new_start_v2;
-
-        // NOTE: Do NOT reduce max_cruise_v2 here! It's set from feedrate and should not change.
-        // The backward pass only updates max_start_v2 based on deceleration constraints.
-
-        // Check if this move needs to be delayed
-        // A move is delayed if we can't determine its velocity yet
-        // (In simplified form, we may not need delays for batch processing)
     }
 }
 
 // Forward pass: finalize velocities from start to end
 // This resolves delayed moves and sets resolved_* fields
 // initial_velocity: velocity at start of batch (for batch continuity)
-// Uses smoothed_dv2 (based on accel_to_decel and cruise_ratio) for velocity changes
 void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float initial_velocity = 0.0f)
 {
     if (blocks.empty()) return;
@@ -620,18 +603,10 @@ void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float 
         // Start velocity is constrained by previous end and junction limit
         float start_v2 = std::min(prev_end_v2, block.klipper.max_start_v2);
 
-        // Use smoothed_dv2 for velocity change calculation
-        // smoothed_dv2 = 2 * accel_to_decel * distance
-        // where accel_to_decel = max_accel * (1 - cruise_ratio)
-        float dv2_for_accel = block.klipper.smoothed_dv2;
-        if (dv2_for_accel <= 0.0f) {
-            dv2_for_accel = block.klipper.max_dv2;  // Fallback
-        }
-
-        // Calculate achievable cruise velocity
+        // Calculate achievable cruise velocity using full acceleration
         float cruise_v2 = std::min(
             block.klipper.max_cruise_v2,
-            start_v2 + dv2_for_accel
+            start_v2 + block.klipper.max_dv2
         );
 
         // Get next block's start velocity limit for end velocity
@@ -645,21 +620,13 @@ void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float 
         // End velocity constrained by next junction and decel capability
         float end_v2 = std::min(next_start_v2, cruise_v2);
 
-        // Verify end velocity is achievable from cruise
-        float max_end_from_cruise = cruise_v2;  // Can maintain or decelerate
-        end_v2 = std::min(end_v2, max_end_from_cruise);
-
-        // Also verify we can decelerate to end within the block distance
-        // Use smoothed accel (accel_to_decel) for deceleration calculation
-        float accel_to_decel = block.acceleration;  // Default to full acceleration
-        if (block.distance > 0.0001f && block.klipper.smoothed_dv2 > 0.0f) {
-            accel_to_decel = block.klipper.smoothed_dv2 / (2.0f * block.distance);
-        }
-        if (accel_to_decel > 0.0001f) {
-            float needed_decel_dist = (cruise_v2 - end_v2) / (2.0f * accel_to_decel);
+        // Verify we can decelerate to end within the block distance
+        float accel = block.acceleration;
+        if (accel > 0.0001f) {
+            float needed_decel_dist = (cruise_v2 - end_v2) / (2.0f * accel);
             if (needed_decel_dist > block.distance) {
-                // Reduce end velocity or cruise velocity
-                end_v2 = cruise_v2 - 2.0f * accel_to_decel * block.distance;
+                // Can't decelerate in time - reduce end velocity
+                end_v2 = cruise_v2 - 2.0f * accel * block.distance;
                 end_v2 = std::max(end_v2, 0.0f);
             }
         }
