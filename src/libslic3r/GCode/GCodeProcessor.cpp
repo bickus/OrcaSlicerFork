@@ -288,7 +288,7 @@ float calculate_extruder_junction_v2(
 void calculate_klipper_junction(
     const GCodeProcessor::TimeBlock* prev_block,
     GCodeProcessor::TimeBlock& curr_block,
-    const GCodeProcessor::KlipperState& state)
+    const GCodeProcessor::TimeMachine::KlipperState& state)
 {
     // First block starts from rest
     if (prev_block == nullptr) {
@@ -3517,8 +3517,8 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
             block.klipper.junction_deviation = machine.klipper_state.junction_deviation;
 
             // Set max cruise velocity squared
-            // feedrate is in mm/min, convert to mm/s
-            float feedrate_mms = block.feedrate / 60.0f;
+            // feedrate_profile.cruise is already in mm/s
+            float feedrate_mms = block.feedrate_profile.cruise;
             block.klipper.max_cruise_v2 = feedrate_mms * feedrate_mms;
 
             // Set max_dv2 based on acceleration
@@ -4032,8 +4032,8 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
             block.klipper.junction_deviation = machine.klipper_state.junction_deviation;
 
             // Set max cruise velocity squared
-            // feedrate is in mm/min, convert to mm/s
-            float feedrate_mms = block.feedrate / 60.0f;
+            // feedrate_profile.cruise is already in mm/s
+            float feedrate_mms = block.feedrate_profile.cruise;
             block.klipper.max_cruise_v2 = feedrate_mms * feedrate_mms;
 
             // Set max_dv2 based on acceleration

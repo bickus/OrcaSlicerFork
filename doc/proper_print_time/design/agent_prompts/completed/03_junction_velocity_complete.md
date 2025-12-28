@@ -121,7 +121,7 @@ float calculate_extruder_junction_v2(
 void calculate_klipper_junction(
     const GCodeProcessor::TimeBlock* prev_block,
     GCodeProcessor::TimeBlock& curr_block,
-    const GCodeProcessor::KlipperState& state)
+    const GCodeProcessor::TimeMachine::KlipperState& state)
 {
     // First block starts from rest
     if (prev_block == nullptr) {
@@ -181,8 +181,8 @@ void calculate_klipper_junction(
 **Lines 3519-3535: Integration into process_G1()**
 ```cpp
 // Set max cruise velocity squared
-// feedrate is in mm/min, convert to mm/s
-float feedrate_mms = block.feedrate / 60.0f;
+// feedrate_profile.cruise is already in mm/s
+float feedrate_mms = block.feedrate_profile.cruise;
 block.klipper.max_cruise_v2 = feedrate_mms * feedrate_mms;
 
 // Set max_dv2 based on acceleration
@@ -202,8 +202,8 @@ calculate_klipper_junction(prev_block, block, machine.klipper_state);
 **Lines 4034-4050: Integration into process_G2_G3()**
 ```cpp
 // Set max cruise velocity squared
-// feedrate is in mm/min, convert to mm/s
-float feedrate_mms = block.feedrate / 60.0f;
+// feedrate_profile.cruise is already in mm/s
+float feedrate_mms = block.feedrate_profile.cruise;
 block.klipper.max_cruise_v2 = feedrate_mms * feedrate_mms;
 
 // Set max_dv2 based on acceleration
@@ -349,6 +349,46 @@ calculate_klipper_junction(prev_block, block, machine.klipper_state);
 - `doc/proper_print_time/design/02_junction_velocity.md`
 - `doc/proper_print_time/design/agent_prompts/03_junction_velocity.md`
 - `doc/proper_print_time/KLIPPER_PRINT_TIME_ESTIMATION_LOGIC.md`
+
+## Compilation Fixes Applied
+
+### Fix 1: KlipperState Type Qualification
+**Issue:** Initial implementation used `GCodeProcessor::KlipperState` but the type is actually nested within `TimeMachine`.
+
+**Error Messages:**
+- `'KlipperState': is not a member of 'Slic3r::GCodeProcessor'`
+- `missing type specifier - int assumed`
+- `syntax error: missing ',' before '&'`
+
+**Fix:** Changed function signature at line 291:
+```cpp
+// Before:
+const GCodeProcessor::KlipperState& state
+
+// After:
+const GCodeProcessor::TimeMachine::KlipperState& state
+```
+
+**Status:** ✅ Fixed - Correct type qualification used
+
+### Fix 2: Feedrate Field Access
+**Issue:** Initial implementation used `block.feedrate` which doesn't exist. The feedrate is stored in `block.feedrate_profile.cruise` and is already in mm/s.
+
+**Error Messages:**
+- `'feedrate': is not a member of 'Slic3r::GCodeProcessor::TimeBlock'`
+
+**Fix:** Changed at lines 3521 and 4036:
+```cpp
+// Before:
+float feedrate_mms = block.feedrate / 60.0f;  // Wrong field, wrong conversion
+
+// After:
+float feedrate_mms = block.feedrate_profile.cruise;  // Already in mm/s
+```
+
+**Additional Note:** The comment was also updated from "feedrate is in mm/min, convert to mm/s" to "feedrate_profile.cruise is already in mm/s" to accurately reflect that no conversion is needed.
+
+**Status:** ✅ Fixed - Correct field name used, no unnecessary conversion
 
 ## Known Issues
 
