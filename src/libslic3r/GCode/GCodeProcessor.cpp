@@ -1433,15 +1433,23 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
 
         // Initialize Klipper state if needed
         if (mode == EstimatorMode::Klipper) {
-            // Get jerk values - these ARE SCV for Klipper
-            float scv = std::min(
-                static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_x, i)),
-                static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_y, i))
-            );
+            // Check if junction_deviation is set directly in profile
+            float junction_deviation = static_cast<float>(get_option_value(
+                m_time_processor.machine_limits.machine_max_junction_deviation, i));
+
+            // If not set (0 or very small), compute from jerk/SCV values
+            if (junction_deviation < 0.0001f) {
+                // Get jerk values - these ARE SCV for Klipper
+                float scv = std::min(
+                    static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_x, i)),
+                    static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_y, i))
+                );
+                junction_deviation = compute_junction_deviation(scv, max_acceleration);
+            }
+
             float extruder_icv = static_cast<float>(get_option_value(m_time_processor.machine_limits.machine_max_jerk_e, i));
 
-            m_time_processor.machines[i].klipper_state.junction_deviation =
-                compute_junction_deviation(scv, max_acceleration);
+            m_time_processor.machines[i].klipper_state.junction_deviation = junction_deviation;
             m_time_processor.machines[i].klipper_state.accel_to_decel =
                 compute_accel_to_decel(max_acceleration, m_time_processor.machines[i].minimum_cruise_ratio);
             m_time_processor.machines[i].klipper_state.instant_corner_velocity = extruder_icv;
