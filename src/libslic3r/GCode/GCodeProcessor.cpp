@@ -393,9 +393,8 @@ void klipper_backward_pass(
         float new_start_v2 = std::min(block.klipper.max_start_v2, max_start_from_end);
         block.klipper.max_start_v2 = new_start_v2;
 
-        // Update cruise velocity based on achievable start velocity
-        float max_cruise_v2 = new_start_v2 + block.klipper.max_dv2;
-        block.klipper.max_cruise_v2 = std::min(block.klipper.max_cruise_v2, max_cruise_v2);
+        // NOTE: Do NOT reduce max_cruise_v2 here! It's set from feedrate and should not change.
+        // The backward pass only updates max_start_v2 based on deceleration constraints.
 
         // Check if this move needs to be delayed
         // A move is delayed if we can't determine its velocity yet
