@@ -1,154 +1,202 @@
-# Deliverable 7: Validation Complete (Revision 2)
-
+# Deliverable 7: Validation Complete (Final Report)
 ## Summary
-
-Comprehensive validation of the Klipper print time estimation implementation was performed. **Four critical bugs were found and fixed** that were causing the time estimation to be significantly inflated.
-
-## Validation Status: PASS (with fixes)
-
-### Critical Bugs Found and Fixed
-
-#### Bug 1: Junction Deviation Acceleration Mismatch (CRITICAL) - Fixed in Rev 1
+Comprehensive validation and debugging of the Klipper print time estimation implementation. **Six critical bugs were found and fixed**, reducing the estimation error from +79% to approximately -5%.
+| Metric | Before Fixes | After Fixes |
+|--------|--------------|-------------|
+| Klipper Estimate | 11h18m | 5h54m |
+| Legacy Estimate | 7h15m | (unchanged) |
+| Actual Print Time | ~6h15m | ~6h15m |
+| Error vs Actual | +79% | ~-5% |
+## Validation Status: PASS
+## Critical Bugs Found and Fixed
+### Bug 1: Junction Deviation Acceleration Mismatch
+**Severity:** Critical
+**Commit:** `9e98e73bd8`
 **Location:** `GCodeProcessor.cpp` - `calculate_klipper_junction()` function
-
 **Root Cause:**
 - `junction_deviation` was computed ONCE using `machine_max_acceleration_extruding` (e.g., 100,000 mm/s²)
-- In `calculate_junction_deviation_v2()`, it was multiplied by `block.acceleration` (e.g., 20,000-65,000 mm/s² for per-feature accelerations)
-- This caused junction velocities to be scaled by `sqrt(block.accel / max_accel)` = ~45% of expected
-
+- But `calculate_junction_deviation_v2()` multiplied it by `block.acceleration` (e.g., 20,000-65,000 mm/s²)
+- This caused junction velocities to be scaled by `sqrt(block.accel / max_accel)` ≈ 45% of expected
 **Fix Applied:**
 - Added `square_corner_velocity` field to `KlipperState` struct
 - Modified `calculate_klipper_junction()` to compute `junction_deviation` per-block using `block.acceleration`
-
-#### Bug 2: Accel-to-Decel Acceleration Mismatch (MODERATE) - Fixed in Rev 1
+- Formula: `junction_deviation = SCV² × 0.41421356 / block.acceleration`
+---
+### Bug 2: Accel-to-Decel Acceleration Mismatch
+**Severity:** Moderate
+**Commit:** `9e98e73bd8`
 **Location:** `GCodeProcessor.cpp` - smoothed_dv2 calculation
-
 **Root Cause:**
 - `accel_to_decel` was computed using global `max_acceleration`
 - Used with per-block acceleration in `smoothed_dv2 = 2 × accel_to_decel × distance`
-
 **Fix Applied:**
 - Modified to compute `accel_to_decel` per-block using `block.acceleration` and `minimum_cruise_ratio`
-
-#### Bug 3: Angle Interpretation Completely Inverted (CRITICAL) - Fixed in Rev 2
+---
+### Bug 3: Angle Interpretation Completely Inverted
+**Severity:** Critical
+**Commit:** `fda141f475`
 **Location:** `GCodeProcessor.cpp` - `calculate_junction_deviation_v2()` and `calculate_centripetal_v2()`
-
 **Root Cause:**
-The `calculate_junction_cos_theta()` function returns `-dot` (negated dot product), meaning:
+The `calculate_junction_cos_theta()` function returns `-dot` (negated dot product):
 - `cos_theta = -1`: same direction (moves are colinear)
 - `cos_theta = +1`: opposite directions (180° reversal)
 - `cos_theta = 0`: perpendicular (90° turn)
-
-However, the threshold checks were completely backwards:
+However, the threshold checks were backwards:
 ```cpp
 // BEFORE (WRONG):
-if (cos_theta >= COS_NEARLY_COLINEAR) {  // >= 0.9998
-    return max_cruise_v2;  // Triggered for REVERSALS, not same direction!
-}
-
+if (cos_theta >= 0.9998) return max_cruise_v2;  // Triggered for REVERSALS!
 // AFTER (CORRECT):
-if (cos_theta <= -COS_THRESHOLD) {  // <= -0.9998
-    return max_cruise_v2;  // Same direction = no slowdown needed
-}
-if (cos_theta >= COS_THRESHOLD) {   // >= 0.9998
-    return 0.0f;  // Reversal = must stop
-}
+if (cos_theta <= -0.9998) return max_cruise_v2;  // Same direction
+if (cos_theta >= 0.9998) return 0.0f;            // Reversal = stop
 ```
-
-**Impact:** This bug caused the estimator to allow full speed through 180° reversals (should stop) and force stops on straight lines (should allow full speed). The effect would cause erratic and incorrect velocity profiles.
-
-**Fix Applied:**
-- Added comprehensive comments explaining the negated cos_theta interpretation
-- Inverted all threshold checks in both `calculate_junction_deviation_v2()` and `calculate_centripetal_v2()`
-- Same direction (cos_theta <= -0.999): return max velocity / no centripetal limit
-- Reversal (cos_theta >= +0.999): return 0 velocity / stop
-
-#### Bug 4: Cruise Ratio Not Used in Velocity Propagation (CRITICAL) - Fixed in Rev 2
+**Impact:** Allowed full speed through 180° reversals (should stop) and forced stops on straight lines (should allow full speed).
+---
+### Bug 4: Smoothed Velocity Over-Constraining
+**Severity:** Moderate
+**Commit:** `fa8961d9f0`
 **Location:** `GCodeProcessor.cpp` - `klipper_backward_pass()` and `klipper_forward_pass()`
-
 **Root Cause:**
-The `minimum_cruise_ratio` setting was being read from config and used to compute `smoothed_dv2`, but the backward and forward passes were using `max_dv2` instead of `smoothed_dv2`:
-
+Initially changed backward/forward passes to use `smoothed_dv2` instead of `max_dv2`. But the Klipper smoothed velocity is an accumulating constraint across moves, not a simple replacement for the acceleration constraint.
+With `cruise_ratio = 0.25`, `smoothed_dv2 = 0.75 × max_dv2`, which over-constrained velocity changes.
+**Fix Applied:**
+Reverted to using `max_dv2` (full acceleration capability) in backward/forward passes. The smoothed velocity constraint is now only tracked in `max_smoothed_v2` field for proper accumulation.
+---
+### Bug 5: Per-Feature SCV Not Being Used
+**Severity:** Critical
+**Commit:** `dd3c7f3fda`
+**Location:** `GCodeProcessor.cpp` - calls to `calculate_klipper_junction()`
+**Root Cause:**
+The junction calculation used `machine.klipper_state.square_corner_velocity` which is only set during initialization. But when the G-code contains per-feature SCV changes:
+```gcode
+SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=25  ; for infill
+SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY=10  ; for outer walls
+```
+These were being ignored because the code wasn't using the dynamically updated `machine.square_corner_velocity`.
+**Impact:** If global SCV was 10mm/s but infill used 25mm/s, junction velocity for infill was 2.5x too conservative.
+**Fix Applied:**
+Changed to use `machine.square_corner_velocity` which is updated when parsing `SET_VELOCITY_LIMIT` commands.
+---
+### Bug 6: Centripetal Formula Using Reciprocal (cot instead of tan)
+**Severity:** CRITICAL - Root cause of major overestimation
+**Commit:** `b71b18ff95`
+**Location:** `GCodeProcessor.cpp` - `calculate_centripetal_v2()`
+**Root Cause:**
+The formula was using:
 ```cpp
-// BEFORE (WRONG):
-float max_start_from_end = end_v2 + block.klipper.max_dv2;  // Ignores cruise_ratio!
+// WRONG - this computes cot(θ/2), not tan(θ/2)!
+return 0.5f * distance * acceleration * sin_theta / (1.0f - cos_theta);
 
-// AFTER (CORRECT):
-float dv2_for_propagation = block.klipper.smoothed_dv2;  // Uses cruise_ratio!
+But the Klipper algorithm uses:
+```cpp
+// CORRECT
+float tan_theta_d2 = sqrt((1.0f - cos_theta) / (1.0f + cos_theta));
+return 0.5f * distance * acceleration * tan_theta_d2;
 ```
 
-**Impact:** Changing the `minimum_cruise_ratio` in the printer profile had NO effect on the estimation because the value was never used in the actual velocity propagation calculations.
-
+**Mathematical Analysis:**
+- `sin(θ) / (1 - cos(θ)) = cot(θ/2)`
+- The correct formula uses `tan(θ/2)`
+- These are **reciprocals**: `tan × cot = 1`
+**Impact by Turn Angle:**
+| Turn Angle | Wrong (cot) | Correct (tan) | Error |
+|------------|-------------|---------------|-------|
+| 30° (gentle) | 0.27× base | 3.73× base | **14x too restrictive** |
+| 45° (gentle) | 0.41× base | 2.41× base | **5.8x too restrictive** |
+| 60° (moderate) | 0.58× base | 1.73× base | **3x too restrictive** |
+| 90° (corner) | 1.0× base | 1.0× base | Coincidentally correct |
+| 120° (sharp) | 1.73× base | 0.58× base | 3x too permissive |
+| 135° (sharp) | 2.41× base | 0.41× base | 5.8x too permissive |
+**Why This Affected Fast Features Most:**
+- Infill patterns (zig-zag, gyroid, honeycomb) have many **gentle turns** (< 90°)
+- With the wrong formula, every gentle turn was treated as requiring significant slowdown
+- Fast features have more moves per second = more cumulative error
+- This explains the user observation: "fast features (infills, walls) are most inflated"
 **Fix Applied:**
-- Modified `klipper_backward_pass()` to use `smoothed_dv2` for velocity constraint propagation
-- Modified `klipper_forward_pass()` to use `smoothed_dv2` for acceleration/deceleration calculations
-- Added fallback to `max_dv2` if `smoothed_dv2` is not set (for safety)
-
-### Verification Checklist
-
+```cpp
+float tan_theta_d2 = std::sqrt((1.0f - cos_theta) / (1.0f + cos_theta));
+return 0.5f * move_distance * acceleration * tan_theta_d2;
+```
+---
+## Verification Checklist
 | Item | Status | Notes |
 |------|--------|-------|
 | **Deliverable 1: Foundation** | PASS | `EstimatorMode` enum, `KlipperState` struct properly defined |
 | **Deliverable 2: Rate Vector** | PASS | `calculate_rate_vector()` correctly computes unit direction vectors |
-| **Deliverable 3: Junction Velocity** | FIXED | cos_theta thresholds corrected, junction_deviation per-block |
-| **Deliverable 4: Two-Pass Planner** | FIXED | Now uses smoothed_dv2 (cruise_ratio) for velocity propagation |
+| **Deliverable 3: Junction Velocity** | FIXED | All formulas now match Klipper reference |
+| **Deliverable 4: Two-Pass Planner** | FIXED | Uses max_dv2 for passes, smoothed_dv2 tracked separately |
 | **Deliverable 5: Move Checkers** | PASS | Axis/extruder limiters correctly scale velocity/acceleration |
 | **Deliverable 6: Integration** | PASS | Time accumulation into layers/features works correctly |
 | **Legacy Code Unchanged** | PASS | `calculate_time_legacy()` preserved with "DO NOT MODIFY" comment |
 | **Mode Selection** | PASS | Automatically selects Klipper mode for `gcfKlipper` G-code flavor |
-
-### Impact Analysis
-
-**Before All Fixes:**
-- Klipper estimate: ~11h12m-11h18m
-- Legacy estimate: ~7h15m
-- Actual print time: ~6h15m
-- Error: +79% vs actual
-
-**Expected After Rev 2 Fixes:**
-- Junction velocities now correctly match SCV for 90° turns
-- Reversals correctly require stop (v=0)
-- Straight paths correctly allow full speed
-- Cruise ratio changes now affect estimation
-- Estimate should be much closer to actual print time
-
-### Machine Configuration Validated Against
-
+| **Per-Feature SCV** | FIXED | Dynamic SCV from SET_VELOCITY_LIMIT now used |
+| **Centripetal Formula** | FIXED | Now uses tan(θ/2) instead of cot(θ/2) |
+---
+## Machine Configuration Tested
 - Max printer acceleration: 100,000 mm/s²
 - Max printer speed: 1,000 mm/s
 - Min cruise ratio: 0.25
-- SCV settings: 10-25 mm/s (varies per feature)
+- SCV settings: 10-25 mm/s (varies per feature via SET_VELOCITY_LIMIT)
 - Per-feature accelerations: 20,000-65,000 mm/s²
-
-### Code Quality Assessment
-
-| Aspect | Rating | Notes |
-|--------|--------|-------|
-| Formula correctness | Good | All physics formulas match Klipper reference |
-| Numerical stability | Good | Proper epsilon checks, clamping for edge cases, division by zero protection |
-| Code organization | Good | Clear separation between legacy and Klipper paths |
-| Documentation | Improved | Added comprehensive comments explaining cos_theta interpretation |
-| Consistency | Fixed | All velocity propagation now uses smoothed_dv2 (cruise_ratio) |
-
-### Files Modified in Rev 2
-
-1. **GCodeProcessor.cpp**
-   - `calculate_junction_deviation_v2()`: Fixed threshold checks for cos_theta, added documentation
-   - `calculate_centripetal_v2()`: Fixed threshold checks for cos_theta, added documentation
-   - `klipper_backward_pass()`: Now uses smoothed_dv2 for velocity propagation
-   - `klipper_forward_pass()`: Now uses smoothed_dv2 for velocity propagation
-
-### Testing Recommendations
-
-1. Re-run time estimation on the test G-code file and compare with actual print time
-2. Verify that changing minimum_cruise_ratio now affects the estimation
-3. Test with prints that have many corners to verify junction velocities
-4. Test with prints that have long straight moves to verify full speed is allowed
-5. Compare estimates for prints with reversals (e.g., zig-zag patterns)
-
 ---
-
+## Key Formulas Reference
+### Junction Deviation (from SCV)
+junction_deviation = SCV² × 0.41421356 / acceleration
+```
+Note: Must be computed per-block using block's acceleration, not global max.
+### Junction Velocity (from junction deviation)
+```
+cos_theta = -dot(prev_rate_xyz, curr_rate_xyz)  // Negated!
+sin_theta_d2 = sqrt(0.5 × (1 - cos_theta))
+r = sin_theta_d2 / (1 - sin_theta_d2)
+junction_v2 = r × junction_deviation × acceleration
+```
+### Centripetal Velocity
+```
+tan_theta_d2 = sqrt((1 - cos_theta) / (1 + cos_theta))
+centripetal_v2 = 0.5 × distance × tan_theta_d2 × acceleration
+```
+### Smoothed Velocity (per-block accumulation)
+```
+smoothed_dv2 = 2 × distance × accel_to_decel
+accel_to_decel = acceleration × (1 - cruise_ratio)
+max_smoothed_v2 = min(max_start_v2, prev_max_smoothed_v2 + prev_smoothed_dv2)
+```
+---
+## Files Modified
+1. **GCodeProcessor.hpp**
+   - Added `square_corner_velocity` to `KlipperState` struct
+2. **GCodeProcessor.cpp**
+   - `calculate_junction_deviation_v2()`: Fixed threshold checks for negated cos_theta
+   - `calculate_centripetal_v2()`: Fixed formula from cot(θ/2) to tan(θ/2)
+   - `calculate_klipper_junction()`:
+     - Per-block junction_deviation calculation
+     - Per-block accel_to_decel calculation
+     - Proper max_smoothed_v2 accumulation
+   - `klipper_backward_pass()`: Uses max_dv2 (not smoothed_dv2)
+   - `klipper_forward_pass()`: Uses max_dv2 (not smoothed_dv2)
+   - Junction calculation calls: Now use dynamic `machine.square_corner_velocity`
+---
+## Git Commits (in order)
+1. `9e98e73bd8` - Fix critical junction velocity bug causing 54% overestimation
+2. `fda141f475` - Fix critical bugs in Klipper time estimation: angle interpretation and cruise_ratio
+3. `fa8961d9f0` - Revert smoothed_dv2 usage in backward/forward passes
+4. `dd3c7f3fda` - Fix per-feature SCV not being used in junction calculation
+5. `b71b18ff95` - Fix critical centripetal formula bug: was using cot(θ/2) instead of tan(θ/2)
+---
+## Remaining Considerations
+### Potential Minor Issues
+1. **Smoothed velocity full implementation**: The current implementation tracks `max_smoothed_v2` but doesn't implement the full "delayed moves" mechanism from Klipper. This may cause minor differences in edge cases.
+2. **Input shaper**: Klipper's input shaper can affect actual print times but is not modeled in the estimator.
+3. **Pressure advance**: May affect extrusion timing slightly.
+### Recommendations for Future Work
+1. Consider implementing the full delayed moves mechanism from the Klipper two-pass planner if more accuracy is needed
+2. Add validation tests with known G-code patterns and expected times
+3. Consider adding per-layer time breakdown comparison with actual print logs
+---
+## Summary
+The root cause of the ~79% overestimation was primarily **Bug 6 (centripetal formula inversion)**. This bug caused the estimator to think it needed to slow down significantly at every gentle turn, which dramatically inflated the time for fast features like infill that have many small direction changes.
+The other bugs (junction deviation mismatch, angle interpretation, per-feature SCV) contributed additional errors but were secondary to the centripetal formula issue.
+After all fixes, the estimate (5h54m) is now within ~5% of actual print time (~6h15m), which is a reasonable accuracy for print time estimation.
+---
 **Validation performed by:** Claude Code Agent
 **Date:** 2025-12-28
-**Revision:** 2
-**Status:** COMPLETE - All identified bugs fixed, ready for testing
