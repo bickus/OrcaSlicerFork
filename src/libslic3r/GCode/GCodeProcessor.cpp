@@ -345,6 +345,205 @@ void calculate_klipper_junction(
     curr_block.klipper.max_smoothed_v2 = max_start_v2;
 }
 
+// ============================================================================
+// Two-Pass Velocity Planner (Deliverable 4)
+// ============================================================================
+
+// Structure to track delayed moves during backward pass
+struct DelayedMove {
+    size_t block_index;         // Index into blocks vector
+    float start_v2;             // Start velocity² constraint
+    float cruise_v2;            // Cruise velocity² (may be reduced)
+    bool can_finalize{false};   // True when end velocity is known
+};
+
+// Backward pass: propagate velocity limits from end to start
+// Sets max_start_v2 and max_cruise_v2 for each block
+void klipper_backward_pass(
+    std::vector<GCodeProcessor::TimeBlock>& blocks,
+    std::vector<DelayedMove>& delayed_moves)
+{
+    if (blocks.empty()) return;
+
+    // Process from end to start
+    for (size_t i = blocks.size(); i > 0; --i) {
+        size_t idx = i - 1;
+        auto& block = blocks[idx];
+
+        // Skip non-Klipper blocks
+        if (!block.klipper.is_kinematic && block.klipper.rate_e == 0) {
+            continue;
+        }
+
+        // Get end velocity constraint
+        float end_v2;
+        if (idx == blocks.size() - 1) {
+            // Last block must end at zero
+            end_v2 = 0.0f;
+        } else {
+            // End velocity is next block's start velocity
+            end_v2 = blocks[idx + 1].klipper.max_start_v2;
+        }
+
+        // Calculate max start velocity from end velocity and acceleration
+        // Using v_start² = v_end² + 2*a*d (note: + because we're going backward)
+        float max_start_from_end = end_v2 + block.klipper.max_dv2;
+
+        // Start velocity is minimum of junction limit and kinematic limit
+        float new_start_v2 = std::min(block.klipper.max_start_v2, max_start_from_end);
+        block.klipper.max_start_v2 = new_start_v2;
+
+        // Update cruise velocity based on achievable start velocity
+        float max_cruise_v2 = new_start_v2 + block.klipper.max_dv2;
+        block.klipper.max_cruise_v2 = std::min(block.klipper.max_cruise_v2, max_cruise_v2);
+
+        // Check if this move needs to be delayed
+        // A move is delayed if we can't determine its velocity yet
+        // (In simplified form, we may not need delays for batch processing)
+    }
+}
+
+// Forward pass: finalize velocities from start to end
+// This resolves delayed moves and sets resolved_* fields
+void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks)
+{
+    if (blocks.empty()) return;
+
+    float prev_end_v2 = 0.0f;  // First block starts from rest
+
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        auto& block = blocks[i];
+
+        // Skip non-Klipper blocks
+        if (!block.klipper.is_kinematic && block.klipper.rate_e == 0) {
+            block.klipper.resolved_start_v = 0.0f;
+            block.klipper.resolved_cruise_v = 0.0f;
+            block.klipper.resolved_end_v = 0.0f;
+            prev_end_v2 = 0.0f;
+            continue;
+        }
+
+        // Start velocity is constrained by previous end and junction limit
+        float start_v2 = std::min(prev_end_v2, block.klipper.max_start_v2);
+
+        // Calculate achievable cruise velocity
+        float cruise_v2 = std::min(
+            block.klipper.max_cruise_v2,
+            start_v2 + block.klipper.max_dv2
+        );
+
+        // Get next block's start velocity limit for end velocity
+        float next_start_v2;
+        if (i + 1 < blocks.size()) {
+            next_start_v2 = blocks[i + 1].klipper.max_start_v2;
+        } else {
+            next_start_v2 = 0.0f;  // Last block ends at rest
+        }
+
+        // End velocity constrained by next junction and decel capability
+        float end_v2 = std::min(next_start_v2, cruise_v2);
+
+        // Verify end velocity is achievable from cruise
+        float max_end_from_cruise = cruise_v2;  // Can maintain or decelerate
+        end_v2 = std::min(end_v2, max_end_from_cruise);
+
+        // Also verify we can decelerate to end within the block distance
+        // Using v_end² = v_cruise² - 2*a*d_decel
+        // d_decel = (v_cruise² - v_end²) / (2*a)
+        // If d_decel > block.distance, we need to reduce cruise
+        float decel_accel = block.acceleration;
+        if (decel_accel > 0.0001f) {
+            float needed_decel_dist = (cruise_v2 - end_v2) / (2.0f * decel_accel);
+            if (needed_decel_dist > block.distance) {
+                // Reduce end velocity or cruise velocity
+                end_v2 = cruise_v2 - 2.0f * decel_accel * block.distance;
+                end_v2 = std::max(end_v2, 0.0f);
+            }
+        }
+
+        // Store resolved velocities (convert from v² to v)
+        block.klipper.resolved_start_v = std::sqrt(start_v2);
+        block.klipper.resolved_cruise_v = std::sqrt(cruise_v2);
+        block.klipper.resolved_end_v = std::sqrt(end_v2);
+
+        prev_end_v2 = end_v2;
+    }
+}
+
+// Calculate time for a block using resolved velocities
+// Returns total time for the move
+float calculate_klipper_block_time(GCodeProcessor::TimeBlock& block)
+{
+    float start_v = block.klipper.resolved_start_v;
+    float cruise_v = block.klipper.resolved_cruise_v;
+    float end_v = block.klipper.resolved_end_v;
+    float accel = block.acceleration;
+    float distance = block.distance;
+
+    if (distance < 0.0001f || accel < 0.0001f) {
+        return 0.0f;
+    }
+
+    // Calculate acceleration distance: d_accel = (v_cruise² - v_start²) / (2*a)
+    float accel_dist = 0.0f;
+    if (cruise_v > start_v) {
+        accel_dist = (cruise_v * cruise_v - start_v * start_v) / (2.0f * accel);
+    }
+
+    // Calculate deceleration distance: d_decel = (v_cruise² - v_end²) / (2*a)
+    float decel_dist = 0.0f;
+    if (cruise_v > end_v) {
+        decel_dist = (cruise_v * cruise_v - end_v * end_v) / (2.0f * accel);
+    }
+
+    // Check if we have a cruise phase
+    float cruise_dist = distance - accel_dist - decel_dist;
+
+    if (cruise_dist < 0.0f) {
+        // No cruise phase - triangle profile
+        // Need to find the peak velocity where accel meets decel
+        // v_peak² = v_start² + 2*a*d_accel = v_end² + 2*a*d_decel
+        // d_accel + d_decel = distance
+        // Solving: v_peak² = (v_start² + v_end² + 2*a*d) / 2
+        float peak_v2 = (start_v * start_v + end_v * end_v + 2.0f * accel * distance) / 2.0f;
+        float peak_v = std::sqrt(std::max(peak_v2, 0.0f));
+
+        // Recalculate with peak velocity
+        accel_dist = (peak_v * peak_v - start_v * start_v) / (2.0f * accel);
+        decel_dist = distance - accel_dist;
+        cruise_dist = 0.0f;
+        cruise_v = peak_v;  // Peak velocity becomes "cruise" for time calc
+    }
+
+    // Calculate times for each phase
+    // t = (v_final - v_initial) / a for accel/decel
+    // t = d / v for cruise
+    float accel_time = 0.0f;
+    if (cruise_v > start_v && accel > 0.0f) {
+        accel_time = (cruise_v - start_v) / accel;
+    }
+
+    float cruise_time = 0.0f;
+    if (cruise_dist > 0.0f && cruise_v > 0.0f) {
+        cruise_time = cruise_dist / cruise_v;
+    }
+
+    float decel_time = 0.0f;
+    if (cruise_v > end_v && accel > 0.0f) {
+        decel_time = (cruise_v - end_v) / accel;
+    }
+
+    float total_time = accel_time + cruise_time + decel_time;
+
+    // Sanity check: time should be at least distance / cruise_v
+    if (cruise_v > 0.0f) {
+        float min_time = distance / cruise_v;
+        total_time = std::max(total_time, min_time * 0.99f);  // Allow small tolerance
+    }
+
+    return total_time;
+}
+
 } // namespace
 
 static constexpr double kPI = 3.14159265358979323846;
@@ -732,12 +931,75 @@ void GCodeProcessor::TimeMachine::calculate_time_legacy(size_t keep_last_n_block
         blocks.clear();
 }
 
-// New Klipper implementation stub (to be implemented in later deliverables)
+// Klipper two-pass velocity planning implementation (Deliverable 4)
 void GCodeProcessor::TimeMachine::calculate_time_klipper(size_t keep_last_n_blocks, float additional_time)
 {
-    // TODO: Implement in Deliverable 4
-    // For now, fall back to legacy to maintain current behavior
-    calculate_time_legacy(keep_last_n_blocks, additional_time);
+    if (!enabled || blocks.size() < 1)
+        return;
+
+    assert(keep_last_n_blocks <= blocks.size());
+
+    // Step 1: Backward pass - propagate velocity constraints
+    std::vector<DelayedMove> delayed;
+    klipper_backward_pass(blocks, delayed);
+
+    // Step 2: Forward pass - resolve velocities
+    klipper_forward_pass(blocks);
+
+    // Step 3: Calculate time for each block and accumulate
+    size_t n_blocks_process = blocks.size() - keep_last_n_blocks;
+    for (size_t i = 0; i < n_blocks_process; ++i) {
+        TimeBlock& block = blocks[i];
+
+        // Record kinematics if needed
+        if (collect_kinematics && owner != nullptr)
+            owner->record_block_kinematics(block, time_mode);
+
+        // Calculate block time using Klipper algorithm
+        float block_time = calculate_klipper_block_time(block);
+
+        if (i == 0)
+            block_time += additional_time;
+
+        // Accumulate time (same pattern as legacy)
+        time += block_time;
+        gcode_time.cache += block_time;
+
+        // Don't calculate travel of start gcode into travel time
+        if (!block.flags.prepare_stage || block.move_type != EMoveType::Travel)
+            moves_time[static_cast<size_t>(block.move_type)] += block_time;
+
+        roles_time[static_cast<size_t>(block.role)] += block_time;
+
+        // Update layer times
+        if (block.layer_id >= layers_time.size()) {
+            const size_t curr_size = layers_time.size();
+            layers_time.resize(block.layer_id);
+            for (size_t j = curr_size; j < layers_time.size(); ++j) {
+                layers_time[j] = 0.0f;
+            }
+        }
+        layers_time[block.layer_id - 1] += block_time;
+
+        // Prepare time
+        if (block.flags.prepare_stage)
+            prepare_time += block_time;
+
+        // Cache G1 line times
+        g1_times_cache.push_back({ block.g1_line_id, block.remaining_internal_g1_lines, time });
+
+        // Update times for remaining time to printer stop placeholders
+        auto it_stop_time = std::lower_bound(stop_times.begin(), stop_times.end(), block.g1_line_id,
+            [](const StopTime& t, unsigned int value) { return t.g1_line_id < value; });
+        if (it_stop_time != stop_times.end() && it_stop_time->g1_line_id == block.g1_line_id)
+            it_stop_time->elapsed_time = time;
+    }
+
+    // Erase processed blocks
+    if (keep_last_n_blocks)
+        blocks.erase(blocks.begin(), blocks.begin() + n_blocks_process);
+    else
+        blocks.clear();
 }
 
 // Dispatcher based on estimator mode
