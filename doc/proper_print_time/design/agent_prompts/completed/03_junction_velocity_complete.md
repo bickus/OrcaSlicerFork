@@ -121,7 +121,8 @@ float calculate_extruder_junction_v2(
 void calculate_klipper_junction(
     const GCodeProcessor::TimeBlock* prev_block,
     GCodeProcessor::TimeBlock& curr_block,
-    const GCodeProcessor::TimeMachine::KlipperState& state)
+    float junction_deviation,
+    float instant_corner_velocity)
 {
     // First block starts from rest
     if (prev_block == nullptr) {
@@ -133,9 +134,8 @@ void calculate_klipper_junction(
     // Non-kinematic moves (E-only) use only extruder junction logic
     if (!curr_block.klipper.is_kinematic || !prev_block->klipper.is_kinematic) {
         // For E-only moves, junction velocity is limited by instant_corner_velocity
-        float icv = state.instant_corner_velocity;
-        curr_block.klipper.max_start_v2 = icv * icv;
-        curr_block.klipper.max_smoothed_v2 = icv * icv;
+        curr_block.klipper.max_start_v2 = instant_corner_velocity * instant_corner_velocity;
+        curr_block.klipper.max_smoothed_v2 = instant_corner_velocity * instant_corner_velocity;
         return;
     }
 
@@ -147,7 +147,7 @@ void calculate_klipper_junction(
     // Calculate junction deviation limit
     float jd_v2 = calculate_junction_deviation_v2(
         cos_theta,
-        state.junction_deviation,
+        junction_deviation,
         curr_block.acceleration,  // Use block's acceleration
         std::min(prev_block->klipper.max_cruise_v2, curr_block.klipper.max_cruise_v2));
 
@@ -161,7 +161,7 @@ void calculate_klipper_junction(
     float ext_v2 = calculate_extruder_junction_v2(
         prev_block->klipper.rate_e,
         curr_block.klipper.rate_e,
-        state.instant_corner_velocity);
+        instant_corner_velocity);
 
     // Combined junction velocity is minimum of all limits
     float max_start_v2 = std::min({jd_v2, cent_v2, ext_v2});
@@ -196,7 +196,9 @@ if (!machine.blocks.empty()) {
 }
 
 // Calculate junction velocity
-calculate_klipper_junction(prev_block, block, machine.klipper_state);
+calculate_klipper_junction(prev_block, block,
+    machine.klipper_state.junction_deviation,
+    machine.klipper_state.instant_corner_velocity);
 ```
 
 **Lines 4034-4050: Integration into process_G2_G3()**
@@ -217,7 +219,9 @@ if (!machine.blocks.empty()) {
 }
 
 // Calculate junction velocity
-calculate_klipper_junction(prev_block, block, machine.klipper_state);
+calculate_klipper_junction(prev_block, block,
+    machine.klipper_state.junction_deviation,
+    machine.klipper_state.instant_corner_velocity);
 ```
 
 ## Algorithm Implementation
@@ -389,6 +393,43 @@ float feedrate_mms = block.feedrate_profile.cruise;  // Already in mm/s
 **Additional Note:** The comment was also updated from "feedrate is in mm/min, convert to mm/s" to "feedrate_profile.cruise is already in mm/s" to accurately reflect that no conversion is needed.
 
 **Status:** ✅ Fixed - Correct field name used, no unnecessary conversion
+
+### Fix 3: Private Type Access
+**Issue:** `TimeMachine` is a private nested struct in `GCodeProcessor`, so `GCodeProcessor::TimeMachine::KlipperState` cannot be accessed from the anonymous namespace.
+
+**Error Message:**
+- `'Slic3r::GCodeProcessor::TimeMachine': cannot access private struct declared in class 'Slic3r::GCodeProcessor'`
+
+**Fix:** Changed function signature to accept individual parameters instead of the KlipperState struct:
+```cpp
+// Before:
+void calculate_klipper_junction(
+    const GCodeProcessor::TimeBlock* prev_block,
+    GCodeProcessor::TimeBlock& curr_block,
+    const GCodeProcessor::TimeMachine::KlipperState& state)
+
+// After:
+void calculate_klipper_junction(
+    const GCodeProcessor::TimeBlock* prev_block,
+    GCodeProcessor::TimeBlock& curr_block,
+    float junction_deviation,
+    float instant_corner_velocity)
+```
+
+Updated call sites (lines 3535-3537, 4051-4053) to pass individual parameters:
+```cpp
+// Before:
+calculate_klipper_junction(prev_block, block, machine.klipper_state);
+
+// After:
+calculate_klipper_junction(prev_block, block,
+    machine.klipper_state.junction_deviation,
+    machine.klipper_state.instant_corner_velocity);
+```
+
+**Rationale:** The function only uses two fields from KlipperState (`junction_deviation` and `instant_corner_velocity`), so passing them individually avoids the access restriction issue while maintaining the same functionality.
+
+**Status:** ✅ Fixed - Uses accessible parameters instead of private type
 
 ## Known Issues
 

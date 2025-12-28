@@ -284,11 +284,13 @@ float calculate_extruder_junction_v2(
 // Calculate all junction limits and set max_start_v2 for a block
 // prev_block: the preceding block (nullptr for first block)
 // curr_block: the current block being processed
-// klipper_state: machine's Klipper configuration
+// junction_deviation: Klipper junction deviation parameter
+// instant_corner_velocity: Klipper instant corner velocity parameter
 void calculate_klipper_junction(
     const GCodeProcessor::TimeBlock* prev_block,
     GCodeProcessor::TimeBlock& curr_block,
-    const GCodeProcessor::TimeMachine::KlipperState& state)
+    float junction_deviation,
+    float instant_corner_velocity)
 {
     // First block starts from rest
     if (prev_block == nullptr) {
@@ -300,9 +302,8 @@ void calculate_klipper_junction(
     // Non-kinematic moves (E-only) use only extruder junction logic
     if (!curr_block.klipper.is_kinematic || !prev_block->klipper.is_kinematic) {
         // For E-only moves, junction velocity is limited by instant_corner_velocity
-        float icv = state.instant_corner_velocity;
-        curr_block.klipper.max_start_v2 = icv * icv;
-        curr_block.klipper.max_smoothed_v2 = icv * icv;
+        curr_block.klipper.max_start_v2 = instant_corner_velocity * instant_corner_velocity;
+        curr_block.klipper.max_smoothed_v2 = instant_corner_velocity * instant_corner_velocity;
         return;
     }
 
@@ -314,7 +315,7 @@ void calculate_klipper_junction(
     // Calculate junction deviation limit
     float jd_v2 = calculate_junction_deviation_v2(
         cos_theta,
-        state.junction_deviation,
+        junction_deviation,
         curr_block.acceleration,  // Use block's acceleration
         std::min(prev_block->klipper.max_cruise_v2, curr_block.klipper.max_cruise_v2));
 
@@ -328,7 +329,7 @@ void calculate_klipper_junction(
     float ext_v2 = calculate_extruder_junction_v2(
         prev_block->klipper.rate_e,
         curr_block.klipper.rate_e,
-        state.instant_corner_velocity);
+        instant_corner_velocity);
 
     // Combined junction velocity is minimum of all limits
     float max_start_v2 = std::min({jd_v2, cent_v2, ext_v2});
@@ -3532,7 +3533,9 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
             }
 
             // Calculate junction velocity
-            calculate_klipper_junction(prev_block, block, machine.klipper_state);
+            calculate_klipper_junction(prev_block, block,
+                machine.klipper_state.junction_deviation,
+                machine.klipper_state.instant_corner_velocity);
         }
 
         // calculates block trapezoid
@@ -4047,7 +4050,9 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
             }
 
             // Calculate junction velocity
-            calculate_klipper_junction(prev_block, block, machine.klipper_state);
+            calculate_klipper_junction(prev_block, block,
+                machine.klipper_state.junction_deviation,
+                machine.klipper_state.instant_corner_velocity);
         }
 
         //BBS: calculates block trapezoid
