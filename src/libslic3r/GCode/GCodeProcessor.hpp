@@ -576,6 +576,7 @@ class Print;
 
             EstimatorMode estimator_mode{EstimatorMode::Legacy};
             KlipperState klipper_state;
+            float klipper_prev_batch_end_v{0.0f};  // Track velocity between batches
 
             bool collect_kinematics{ false };
             PrintEstimatedStatistics::ETimeMode time_mode{ PrintEstimatedStatistics::ETimeMode::Normal };

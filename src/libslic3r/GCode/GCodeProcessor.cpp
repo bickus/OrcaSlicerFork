@@ -405,11 +405,12 @@ void klipper_backward_pass(
 
 // Forward pass: finalize velocities from start to end
 // This resolves delayed moves and sets resolved_* fields
-void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks)
+// initial_velocity: velocity at start of batch (for batch continuity)
+void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float initial_velocity = 0.0f)
 {
     if (blocks.empty()) return;
 
-    float prev_end_v2 = 0.0f;  // First block starts from rest
+    float prev_end_v2 = initial_velocity * initial_velocity;  // Start with batch initial velocity
 
     for (size_t i = 0; i < blocks.size(); ++i) {
         auto& block = blocks[i];
@@ -780,6 +781,7 @@ void GCodeProcessor::TimeMachine::reset()
     time = 0.0f;
     square_corner_velocity = 5.0f;
     klipper_mode = false;
+    klipper_prev_batch_end_v = 0.0f;
     collect_kinematics = false;
     stop_times = std::vector<StopTime>();
     curr.reset();
@@ -943,8 +945,8 @@ void GCodeProcessor::TimeMachine::calculate_time_klipper(size_t keep_last_n_bloc
     std::vector<DelayedMove> delayed;
     klipper_backward_pass(blocks, delayed);
 
-    // Step 2: Forward pass - resolve velocities
-    klipper_forward_pass(blocks);
+    // Step 2: Forward pass - resolve velocities with batch continuity
+    klipper_forward_pass(blocks, klipper_prev_batch_end_v);
 
     // Step 3: Calculate time for each block and accumulate
     size_t n_blocks_process = blocks.size() - keep_last_n_blocks;
@@ -993,6 +995,11 @@ void GCodeProcessor::TimeMachine::calculate_time_klipper(size_t keep_last_n_bloc
             [](const StopTime& t, unsigned int value) { return t.g1_line_id < value; });
         if (it_stop_time != stop_times.end() && it_stop_time->g1_line_id == block.g1_line_id)
             it_stop_time->elapsed_time = time;
+    }
+
+    // Save end velocity of last processed block for next batch
+    if (n_blocks_process > 0) {
+        klipper_prev_batch_end_v = blocks[n_blocks_process - 1].klipper.resolved_end_v;
     }
 
     // Erase processed blocks
