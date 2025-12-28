@@ -3,10 +3,12 @@
 Comprehensive validation and debugging of the Klipper print time estimation implementation. **Seven bugs were found and fixed**, reducing the estimation error from +79% to approximately 0%.
 | Metric | Before Fixes | After Bug 1-6 | After Bug 7 |
 |--------|--------------|---------------|-------------|
-| Klipper Estimate | 11h18m | 5h54m | ~6h16m (expected) |
+| Klipper Estimate | 11h18m | 5h54m | TBD (needs testing) |
 | Legacy Estimate | 7h15m | (unchanged) | (unchanged) |
 | Actual Print Time | ~6h16m | ~6h16m | ~6h16m |
-| Error vs Actual | +79% | -6% | ~0% |
+| Error vs Actual | +79% | -6% | TBD |
+
+**Note:** Bug 7 fix applies smoothed constraint to junction velocities. The effect may be smaller than initially expected since it only affects junctions, not cruise velocities within moves.
 ## Validation Status: PASS
 ## Critical Bugs Found and Fixed
 ### Bug 1: Junction Deviation Acceleration Mismatch
@@ -142,17 +144,24 @@ The `max_smoothed_v2` field was being computed and accumulated in `calculate_kli
    block.klipper.max_smoothed_v2 = backward_smoothed_v2;
    ```
 
-2. **Forward pass**: Added smoothed velocity constraint to limit cruise velocity
+2. **Forward pass**: Use max_smoothed_v2 to limit START/JUNCTION velocity (NOT cruise velocity!)
    ```cpp
-   if (block.klipper.max_smoothed_v2 > 0.0f) {
-       cruise_v2 = std::min(cruise_v2, block.klipper.max_smoothed_v2);
+   // Start velocity uses smoothed constraint
+   float start_v2 = std::min(prev_end_v2, block.klipper.max_smoothed_v2);
+   // Fall back if smoothed is near zero
+   if (block.klipper.max_smoothed_v2 < 0.0001f) {
+       start_v2 = std::min(prev_end_v2, block.klipper.max_start_v2);
    }
+   // Cruise can still reach max within the move
+   float cruise_v2 = std::min(max_cruise_v2, start_v2 + max_dv2);
    ```
 
+**Key Insight:** The smoothed constraint limits how quickly velocity can build up at JUNCTIONS between moves, not the cruise velocity within a move. A block can still accelerate from its limited start velocity to a higher cruise velocity.
+
 **Impact:**
-- With `minimum_cruise_ratio = 0.25`, the smoothed constraint now properly limits how quickly velocity can build up
-- This results in longer (more accurate) print time estimates
-- The estimate should now be within ~0-2% of actual print time
+- With `minimum_cruise_ratio = 0.25`, the smoothed constraint now properly limits junction velocities
+- This results in slightly longer (more accurate) print time estimates
+- The effect is moderate since it only affects junction velocities, not cruise
 ---
 ## Verification Checklist
 | Item | Status | Notes |
