@@ -460,78 +460,9 @@ float limit_acceleration_by_extruder(
     return std::min(requested_accel, max_accel);
 }
 
-// Get acceleration for a specific print feature
-// This maps ExtrusionRole to the appropriate acceleration setting from machine limits
-// machine_limits: reference to the machine limits configuration
-// mode_idx: time mode index (usually 0 for normal mode)
-// role: extrusion role (perimeter, infill, travel, etc.)
-// default_accel: fallback acceleration if no feature-specific value is set
-// Returns: feature-specific acceleration, or default_accel if not set
-float get_feature_acceleration(
-    const GCodeProcessor::MachineEnvelopeConfig& machine_limits,
-    size_t mode_idx,
-    ExtrusionRole role,
-    float default_accel)
-{
-    // Helper to safely get config value
-    auto get_accel = [&](const auto& config_option) -> float {
-        if (config_option.values.size() > mode_idx && config_option.values[mode_idx] > 0) {
-            return static_cast<float>(config_option.values[mode_idx]);
-        }
-        return 0.0f;
-    };
-
-    // Map extrusion roles to their acceleration settings
-    switch (role) {
-        case erPerimeter:
-        case erExternalPerimeter:
-            // Use outer wall acceleration if available
-            {
-                float accel = get_accel(machine_limits.machine_max_acceleration_outer_wall);
-                if (accel > 0.0f) return accel;
-            }
-            break;
-
-        case erInternalInfill:
-        case erSolidInfill:
-        case erTopSolidInfill:
-        case erBottomSurface:
-            // Use infill acceleration if available
-            {
-                float accel = get_accel(machine_limits.machine_max_acceleration_infill);
-                if (accel > 0.0f) return accel;
-            }
-            break;
-
-        case erBridgeInfill:
-            // Use bridge acceleration if available
-            {
-                float accel = get_accel(machine_limits.machine_max_acceleration_bridge);
-                if (accel > 0.0f) return accel;
-            }
-            break;
-
-        case erSupportMaterial:
-        case erSupportMaterialInterface:
-            // Use support acceleration if available
-            // Note: Most profiles don't have separate support accel
-            break;
-
-        case erTravel:
-            // Use travel acceleration if available
-            {
-                float accel = get_accel(machine_limits.machine_max_acceleration_travel);
-                if (accel > 0.0f) return accel;
-            }
-            break;
-
-        default:
-            break;
-    }
-
-    // Fall back to default acceleration
-    return default_accel;
-}
+// Note: Feature-specific acceleration (outer_wall_acceleration, infill_acceleration, etc.)
+// is already applied to block.acceleration earlier in the G-code processing pipeline.
+// We only need to apply per-axis and extruder limits here based on block.acceleration.
 
 // ============================================================================
 // Two-Pass Velocity Planner (Deliverable 4)
@@ -4031,17 +3962,14 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
                 // Update max cruise velocity squared with limited velocity
                 block.klipper.max_cruise_v2 = limited_velocity * limited_velocity;
 
-                // Get feature-specific acceleration
-                float feature_accel = get_feature_acceleration(
-                    limits,
-                    mode_idx,
-                    block.role,
-                    block.acceleration);
+                // Note: block.acceleration already contains feature-specific acceleration
+                // (outer_wall_acceleration, infill_acceleration, travel_acceleration, etc.)
+                // We only need to apply axis and extruder limits
 
                 // Apply axis acceleration limits
                 float limited_accel = limit_acceleration_by_axis(
                     block.klipper.rate_xyz,
-                    feature_accel,
+                    block.acceleration,
                     max_accel_x, max_accel_y, max_accel_z);
 
                 // Apply extruder acceleration limit
@@ -4617,17 +4545,14 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
                 // Update max cruise velocity squared with limited velocity
                 block.klipper.max_cruise_v2 = limited_velocity * limited_velocity;
 
-                // Get feature-specific acceleration
-                float feature_accel = get_feature_acceleration(
-                    limits,
-                    mode_idx,
-                    block.role,
-                    block.acceleration);
+                // Note: block.acceleration already contains feature-specific acceleration
+                // (outer_wall_acceleration, infill_acceleration, travel_acceleration, etc.)
+                // We only need to apply axis and extruder limits
 
                 // Apply axis acceleration limits
                 float limited_accel = limit_acceleration_by_axis(
                     block.klipper.rate_xyz,
-                    feature_accel,
+                    block.acceleration,
                     max_accel_x, max_accel_y, max_accel_z);
 
                 // Apply extruder acceleration limit

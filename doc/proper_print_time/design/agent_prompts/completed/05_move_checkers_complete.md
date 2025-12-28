@@ -454,17 +454,73 @@ The two-pass planner (Deliverable 4) now receives properly limited velocity and 
 2. **Support material acceleration:** Add dedicated config option if needed
 3. **Dynamic mode index:** Currently uses loop variable `i` as mode index
 
+## Compilation Fixes Applied
+
+### Fix 1: Removed get_feature_acceleration() Function
+**Issue:** Initial implementation included `get_feature_acceleration()` function that attempted to access feature-specific accelerations from `MachineEnvelopeConfig`.
+
+**Error Messages:**
+- `'MachineEnvelopeConfig': is not a member of 'Slic3r::GCodeProcessor'`
+- `'machine_max_acceleration_outer_wall': is not a member of 'Slic3r::MachineEnvelopeConfig'`
+- `'machine_max_acceleration_infill': is not a member of 'Slic3r::MachineEnvelopeConfig'`
+- `'machine_max_acceleration_bridge': is not a member of 'Slic3r::MachineEnvelopeConfig'`
+- Lambda call operator errors
+
+**Root Cause:** Feature-specific accelerations (outer_wall_acceleration, infill_acceleration, etc.) are defined in `PrintObjectConfig`, not in `MachineEnvelopeConfig`. These values are already applied to `block.acceleration` earlier in the G-code processing pipeline before we reach the Klipper-specific code.
+
+**Fix Applied:**
+1. Removed the entire `get_feature_acceleration()` function (lines 463-534)
+2. Replaced with a comment explaining that feature-specific acceleration is already in `block.acceleration`
+3. Updated integration code to use `block.acceleration` directly instead of calling the removed function
+4. Changed from `feature_accel` to `block.acceleration` at lines 3966-3972 and 4552-4558
+
+**Rationale:**
+- Feature-specific accelerations are already applied by the time we reach Klipper code
+- `block.acceleration` contains the correct acceleration for the move's feature/role
+- No need to look it up again
+- Simpler and more efficient
+
+**Status:** ✅ Fixed
+
+### Fix 2: Removed erTravel Reference
+**Issue:** Code attempted to use `erTravel` enum value which doesn't exist in `ExtrusionRole`.
+
+**Error Messages:**
+- `'erTravel': undeclared identifier`
+- `case expression not constant`
+
+**Root Cause:** The `ExtrusionRole` enum (defined in ExtrusionEntity.hpp) does not include an `erTravel` value. Travel moves use other mechanisms in the G-code processor.
+
+**Fix Applied:**
+- Removed the travel case from the switch statement in the removed `get_feature_acceleration()` function
+- Travel acceleration is already handled via `get_travel_acceleration()` earlier in the processing pipeline
+
+**Status:** ✅ Fixed (removed with function)
+
+### Summary of Changes
+**Files Modified:**
+- `src/libslic3r/GCode/GCodeProcessor.cpp`:
+  - Lines 463-465: Replaced `get_feature_acceleration()` function with explanatory comment
+  - Lines 3963-3972: Simplified to use `block.acceleration` directly (process_G1)
+  - Lines 4549-4558: Simplified to use `block.acceleration` directly (arc processing)
+
+**Verified Configuration Access:**
+- `MachineEnvelopeConfig` contains machine-level limits (axis velocities/accelerations)
+- Feature-specific accelerations are in `PrintObjectConfig` and pre-applied to `block.acceleration`
+- No need to access `PrintObjectConfig` from move checkers
+
 ## Conclusion
 
 Deliverable 5 successfully implements move checkers for axis and extruder limits. The implementation:
 - ✅ Limits velocity based on per-axis constraints
 - ✅ Limits acceleration based on per-axis constraints
 - ✅ Applies extruder velocity and acceleration limits
-- ✅ Maps features to appropriate acceleration settings
+- ✅ Uses pre-applied feature-specific accelerations from block.acceleration
 - ✅ Integrates cleanly into existing G-code processing
 - ✅ Applies limits BEFORE junction calculation
 - ✅ Handles all edge cases (zero components, E-only moves)
 - ✅ Preserves 100% backward compatibility with Legacy mode
+- ✅ Compiles without errors
 - ✅ Is ready for validation and testing
 
 **Status: COMPLETE** ✓
