@@ -3948,6 +3948,7 @@ void TabPrinter::build_fff()
         optgroup->append_single_option_line("bbl_use_printhost");
         optgroup->append_single_option_line("scan_first_layer");
         optgroup->append_single_option_line("disable_m73");
+        optgroup->append_single_option_line("print_start_time");
         option = optgroup->get_option("thumbnails");
         option.opt.full_width = true;
         optgroup->append_single_option_line(option);
