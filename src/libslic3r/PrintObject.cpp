@@ -916,6 +916,7 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "inner_wall_line_width"
             || opt_key == "infill_wall_overlap"
             || opt_key == "top_bottom_infill_wall_overlap"
+            || opt_key == "bridge_infill_wall_overlap"
             || opt_key == "seam_gap"
             || opt_key == "role_based_wipe_speed"
             || opt_key == "wipe_on_loops"
@@ -3095,7 +3096,7 @@ void PrintObject::bridge_over_infill()
                                 Surface tmp{*s, {}};
                                 tmp.surface_type = stSecondInternalBridge;
                                 tmp.bridge_angle = bridging_angle_second;
-                                
+
                                 // Insert bridging polygons
                                 for (const ExPolygon &ep : overlap) {
                                     next_new_surfaces.emplace_back(tmp, ep);

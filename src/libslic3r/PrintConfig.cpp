@@ -3387,6 +3387,22 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionPercent(25));
 
+    def = this->add("bridge_infill_wall_overlap", coPercent);
+    def->label = L("Bridge infill/wall overlap");
+    def->category = L("Strength");
+    // xgettext:no-c-format, no-boost-format
+    def->tooltip = L("Bridge infill area is enlarged slightly to overlap with wall for better bonding. "
+                     "The percentage value is relative to bridge infill line width for bridges, "
+                     "or internal bridge infill line width for internal bridges. Max value is 100%. "
+                     "Set to 0 to use the original algorithm with Infill/Wall overlap value. "
+                     "When set to non-zero, a different algorithm is used which may produce slightly different results "
+                     "for values above 40-50% - please validate the generated G-code for your specific use case.");
+    def->sidetext = "%";
+    def->min = 0;
+    def->max = 100;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionPercent(0));
+
     def = this->add("sparse_infill_speed", coFloat);
     def->label = L("Sparse infill");
     def->category = L("Speed");

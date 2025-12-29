@@ -1041,6 +1041,62 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 	        }
 	}
 
+	// Apply bridge infill wall overlap adjustment for bridge fills
+	// When bridge_infill_wall_overlap is 0, we skip this entirely and use the original algorithm
+	// (which applies infill_wall_overlap to all fills including bridges)
+	for (SurfaceFill &fill : surface_fills) {
+		if (fill.expolygons.empty() || fill.region_id == size_t(-1))
+			continue;
+		// Check if this is a bridge fill
+		if (fill.params.extrusion_role == erBridgeInfill || fill.params.extrusion_role == erInternalBridgeInfill) {
+			const LayerRegion &layerm = *layer.regions()[fill.region_id];
+			const PrintRegionConfig &region_config = layerm.region().config();
+			double bridge_overlap_pct = region_config.bridge_infill_wall_overlap.value;
+
+			// Only apply bridge-specific overlap when explicitly set (non-zero)
+			// When 0, the original infill_wall_overlap is used through the standard algorithm
+			if (bridge_overlap_pct != 0) {
+				double infill_overlap_pct = region_config.infill_wall_overlap.value;
+				float nozzle_diameter = float(layer.object()->print()->config().nozzle_diameter.get_at(region_config.wall_filament - 1));
+				double inner_wall_lw = region_config.inner_wall_line_width.get_abs_value(nozzle_diameter);
+
+				// Get the appropriate bridge line width based on extrusion role
+				// Bridge overlap percentage is relative to the bridge infill line width
+				double bridge_line_width;
+				if (fill.params.extrusion_role == erBridgeInfill) {
+					bridge_line_width = region_config.bridge_infill_line_width.get_abs_value(nozzle_diameter);
+					// If 0, falls back to internal solid infill width
+					if (bridge_line_width == 0)
+						bridge_line_width = region_config.internal_solid_infill_line_width.get_abs_value(nozzle_diameter);
+				} else { // erInternalBridgeInfill
+					bridge_line_width = region_config.internal_bridge_infill_line_width.get_abs_value(nozzle_diameter);
+					// If 0, falls back to internal solid infill width
+					if (bridge_line_width == 0)
+						bridge_line_width = region_config.internal_solid_infill_line_width.get_abs_value(nozzle_diameter);
+				}
+
+				// Calculate the overlap amounts
+				double bridge_overlap = bridge_line_width * bridge_overlap_pct / 100.0;
+				double infill_overlap = inner_wall_lw * infill_overlap_pct / 100.0;
+				// Start from no-overlap expolygons and apply bridge overlap
+				// This mimics the original PerimeterGenerator behavior where fill regions are grown from the base
+				ExPolygons base = intersection_ex(fill.no_overlap_expolygons, fill.expolygons);
+				if (!base.empty()) {
+					ExPolygons grown = offset_ex(base, scale_(bridge_overlap));
+					// Clip to layer boundary to prevent growing outside the model
+					// This mimics the original constraint where infill can grow into perimeter area but not beyond model
+					fill.expolygons = intersection_ex(grown, layer.lslices);
+				} else {
+					// Fallback: shrink by infill overlap, then grow by bridge overlap
+					ExPolygons shrunk = offset_ex(fill.expolygons, scale_(-infill_overlap));
+					ExPolygons grown = offset_ex(shrunk, scale_(bridge_overlap));
+					// Clip to layer boundary
+					fill.expolygons = intersection_ex(grown, layer.lslices);
+				}
+			}
+		}
+	}
+
     // we need to detect any narrow surfaces that might collapse
     // when adding spacing below
     // such narrow surfaces are often generated in sloping walls
