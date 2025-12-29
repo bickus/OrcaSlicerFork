@@ -441,8 +441,55 @@ After Bugs 1-6 were fixed, the estimate was 5h54m vs actual 6h16m (~6% underesti
 3. Different propagation direction (forward instead of backward)
 4. Threshold adjustment for peak detection
 
-**Next Steps for Future Agent:** See "Remaining Work: Smoothed Velocity Constraint Accuracy" section above for detailed investigation guidance.
+---
+
+### Bug 10: Unlimited Peak Propagation
+**Severity:** Moderate - Root cause of ~3% overestimation
+**Date Fixed:** 2025-12-29
+**Location:** `GCodeProcessor.cpp` - `klipper_backward_pass()`
+
+**Root Cause:**
+
+The second loop in `klipper_backward_pass()` was propagating `peak_cruise_v2` to ALL non-peak
+moves before a peak, regardless of distance. This meant every move from the start of the print
+to a tight corner could be constrained by that corner's peak_cruise_v2.
+
+But physically, a peak's influence should be LIMITED by how far the smoothed constraint can
+"reach". As you move away from a peak, the accumulated smoothed_dv2 eventually exceeds the
+peak_cruise_v2, meaning moves can accelerate to full speed without being affected by the peak.
+
+**Previous behavior:**
+- Without propagation: 6h4m (-3%)
+- With full propagation: 6h26m (+3%)
+- Difference: 22 minutes added by propagation
+
+**Fix Applied:**
+
+Track accumulated smoothed velocity as we propagate backward. Only apply peak constraint
+while still within the peak's "reach":
+
+```cpp
+float accumulated_smoothed_dv2 = 0.0f;
+
+if (block.klipper.is_peak) {
+    active_peak_cruise_v2 = block.klipper.peak_cruise_v2;
+    accumulated_smoothed_dv2 = 0.0f;  // Reset at peak
+} else {
+    accumulated_smoothed_dv2 += block.klipper.smoothed_dv2;
+
+    // Only constrain if within peak's influence zone
+    if (accumulated_smoothed_dv2 < active_peak_cruise_v2) {
+        block.klipper.peak_cruise_v2 = active_peak_cruise_v2;
+    }
+    // else: leave at default (max_cruise_v2)
+}
+```
+
+**Expected Impact:**
+- Fewer moves constrained by distant peaks
+- Should reduce overestimation from +3% toward actual print time
+
 ---
 **Validation performed by:** Claude Code Agent
 **Date:** 2025-12-28
-**Last Updated:** 2025-12-28
+**Last Updated:** 2025-12-29

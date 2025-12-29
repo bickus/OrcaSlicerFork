@@ -630,24 +630,49 @@ void klipper_backward_pass(
     }
 
     // Propagate peak_cruise_v2 from peaks to delayed (non-peak) moves
-    // Delayed moves should be constrained by the next peak's cruise velocity
-    // (the peak they're slowing down for)
+    //
+    // Key insight from Klipper Estimator: Only propagate to moves where velocity
+    // is still "building up" toward the peak. The condition is:
+    //   (this_smoothed + smoothed_dv2 > next_smoothed) || already_in_sequence
+    //
+    // This checks if this move's smoothed velocity plus what can be gained is
+    // greater than the next move's smoothed velocity - meaning we're on the
+    // acceleration ramp toward the peak.
     float active_peak_cruise_v2 = std::numeric_limits<float>::max();
+    bool in_influence_zone = false;
+
     for (size_t i = blocks.size(); i > 0; --i) {
         size_t idx = i - 1;
         auto& block = blocks[idx];
 
         if (!block.klipper.is_kinematic && block.klipper.rate_e == 0) {
             active_peak_cruise_v2 = std::numeric_limits<float>::max();
+            in_influence_zone = false;
             continue;
         }
 
         if (block.klipper.is_peak) {
-            // Update active peak constraint
+            // Start new peak constraint
             active_peak_cruise_v2 = block.klipper.peak_cruise_v2;
+            in_influence_zone = true;  // Peak starts the influence zone
         } else {
-            // Apply the peak constraint to this delayed move
-            block.klipper.peak_cruise_v2 = active_peak_cruise_v2;
+            // Check if velocity is still building toward the peak
+            // This matches Klipper's: (smoothed_v2 + smoothed_dv2 > next_smoothed_v2)
+            float this_smoothed = block.klipper.max_smoothed_v2;
+            float next_smoothed = (idx + 1 < blocks.size())
+                ? blocks[idx + 1].klipper.max_smoothed_v2
+                : 0.0f;
+
+            bool velocity_building = (this_smoothed + block.klipper.smoothed_dv2 > next_smoothed);
+
+            if (in_influence_zone || velocity_building) {
+                // Still in the acceleration ramp toward the peak
+                block.klipper.peak_cruise_v2 = active_peak_cruise_v2;
+                in_influence_zone = velocity_building;  // Continue if still building
+            } else {
+                // Exited the influence zone
+                in_influence_zone = false;
+            }
         }
     }
 }
@@ -688,14 +713,11 @@ void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float 
         float cruise_v2;
 
         if (block.klipper.is_peak) {
-            // For peak moves: use kinematic averaging (Klipper algorithm)
-            // cruise_v2 = min((start_v2 + reachable_start_v2) × 0.5, max_cruise_v2, peak_cruise_v2)
-            float kinematic_avg = (start_v2 + block.klipper.reachable_start_v2) * 0.5f;
-            cruise_v2 = std::min({
-                kinematic_avg,
-                block.klipper.max_cruise_v2,
-                block.klipper.peak_cruise_v2
-            });
+            // For peak moves: use peak_cruise_v2 directly (already has kinematic averaging from backward pass)
+            // The backward pass computed: peak_cruise_v2 = min(max_cruise, (smoothed + reachable) * 0.5)
+            // So we don't need another averaging here.
+            cruise_v2 = std::min(block.klipper.max_cruise_v2, start_v2 + block.klipper.max_dv2);
+            cruise_v2 = std::min(cruise_v2, block.klipper.peak_cruise_v2);
         } else {
             // For delayed (non-peak) moves: use kinematic start and peak constraint
             // cruise_v2 = min(start_v2, peak_cruise_v2)
