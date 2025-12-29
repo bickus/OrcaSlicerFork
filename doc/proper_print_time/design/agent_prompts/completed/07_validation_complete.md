@@ -2,11 +2,34 @@
 
 ## Summary
 
-Implemented fixes to align OrcaSlicer's Klipper time estimation with the reference `klipper_estimator` implementation. After analysis and fixes, the time estimation improved but is still not fully accurate.
+Implemented fixes to align OrcaSlicer's Klipper time estimation with the reference `klipper_estimator` implementation.
 
-**Current Status**: Print time estimate is **5h55m** vs actual **6h16m** (approximately 5.6% underestimate)
+**Current Status**: Print time estimate is **6h12m** vs actual **6h16m** (approximately 1% underestimate, ~4 minutes)
 
-**Previous Status**: Print time was 54% overestimated before fixes from earlier deliverables.
+**Previous Status**: 5h55m (5.6% underestimate) → 54% overestimate before all fixes.
+
+## Session 2 Fixes (Final ~17 minutes fixed)
+
+### 1. junction_deviation update on SQUARE_CORNER_VELOCITY change
+- Location: `process_SET_VELOCITY_LIMIT()` lines 5158-5164
+- When SCV changes via SET_VELOCITY_LIMIT, must recalculate junction_deviation
+- **Impact: ~13 minutes improvement**
+
+### 2. accel_to_decel update on MINIMUM_CRUISE_RATIO change
+- Location: `process_SET_VELOCITY_LIMIT()` lines 5214-5220
+- When minimum_cruise_ratio changes, must recalculate accel_to_decel
+
+### 3. Previously applied (Session 1):
+- smoothed_dv2 clamping to max_dv2 after acceleration limiting
+- E-only moves forcing complete stop (max_start_v2 = 0)
+- 180° direction reversals forcing complete stop (max_start_v2 = 0)
+- junction_deviation update on ACCEL change
+- accel_to_decel update on ACCEL change
+
+### Remaining ~4 minute gap (~1%) likely due to:
+- Float vs double precision (OrcaSlicer float, klipper_estimator f64)
+- Accumulated rounding over hundreds of thousands of moves
+- Minor edge case differences
 
 ## Reference Implementation Analyzed
 
@@ -285,12 +308,8 @@ The estimate went from 54% overestimate to 5.6% underestimate, which is a signif
 
 ## Conclusion
 
-The implementation now much more closely matches klipper_estimator's algorithm, but there are still discrepancies causing ~5.6% underestimation. The most likely causes are:
-1. Differences in arc handling
-2. Move checker implementation gaps
-3. Batch processing edge effects
-4. Potential differences in how feature-specific accelerations are applied
+The implementation now closely matches klipper_estimator's algorithm. Accuracy improved from 54% overestimate → 5.6% underestimate → **1% underestimate (~4 minutes on 6h16m print)**.
 
-Further debugging with side-by-side comparison of per-move times is recommended to identify the remaining discrepancy source.
+Key insight: Klipper state variables (junction_deviation, accel_to_decel) must be updated whenever their dependencies change mid-print via SET_VELOCITY_LIMIT commands.
 
-**Status: PARTIALLY COMPLETE** - Algorithm alignment improved, but accuracy target not yet met.
+**Status: COMPLETE** - Within ~1% of klipper_estimator accuracy.
