@@ -282,6 +282,7 @@ float calculate_extruder_junction_v2(
 }
 
 // Calculate all junction limits and set max_start_v2 for a block
+// Matches klipper_estimator's apply_junction() logic exactly
 // prev_block: the preceding block (nullptr for first block)
 // curr_block: the current block being processed
 // junction_deviation: Klipper junction deviation parameter
@@ -299,31 +300,44 @@ void calculate_klipper_junction(
         return;
     }
 
-    // Non-kinematic moves (E-only) use only extruder junction logic
+    // Non-kinematic moves (E-only) - klipper_estimator returns early without setting
+    // max_start_v2 or max_smoothed_v2, leaving them at 0. This forces the previous
+    // kinematic move to decelerate to 0 before an E-only move (retraction).
+    // This matches Klipper's behavior where you can't have angular junction
+    // calculations between kinematic and non-kinematic moves.
     if (!curr_block.klipper.is_kinematic || !prev_block->klipper.is_kinematic) {
-        // For E-only moves, junction velocity is limited by instant_corner_velocity
-        curr_block.klipper.max_start_v2 = instant_corner_velocity * instant_corner_velocity;
-        curr_block.klipper.max_smoothed_v2 = instant_corner_velocity * instant_corner_velocity;
+        // Leave max_start_v2 and max_smoothed_v2 at 0 (initialized values)
+        // This forces a complete stop at transitions to/from E-only moves
+        curr_block.klipper.max_start_v2 = 0.0f;
+        curr_block.klipper.max_smoothed_v2 = 0.0f;
         return;
     }
 
-    // Calculate angle between moves
-    float cos_theta = calculate_junction_cos_theta(
+    // Calculate angle between moves (matches klipper_estimator)
+    float junction_cos_theta = calculate_junction_cos_theta(
         prev_block->klipper.rate_xyz,
         curr_block.klipper.rate_xyz);
 
-    // Calculate junction deviation limit
-    float jd_v2 = calculate_junction_deviation_v2(
-        cos_theta,
-        junction_deviation,
-        curr_block.acceleration,  // Use block's acceleration
-        std::min(prev_block->klipper.max_cruise_v2, curr_block.klipper.max_cruise_v2));
+    // 180° direction reversal: junction_cos_theta > 0.999999 means moves are nearly opposite
+    // (Note: cos_theta = -dot, so dot ≈ -1 means opposite directions, cos_theta ≈ 1)
+    // klipper_estimator returns early without setting max_start_v2, leaving it at 0.
+    // This forces a complete stop for direction reversals.
+    if (junction_cos_theta > 0.999999f) {
+        // Near-180° turn requires stopping (leave max_start_v2 at 0)
+        curr_block.klipper.max_start_v2 = 0.0f;
+        curr_block.klipper.max_smoothed_v2 = 0.0f;
+        return;
+    }
+    junction_cos_theta = std::max(junction_cos_theta, -0.999999f);
 
-    // Calculate centripetal limit
-    float cent_v2 = calculate_centripetal_v2(
-        curr_block.distance,  // Use current block's distance
-        curr_block.acceleration,
-        cos_theta);
+    // Calculate half-angle components (matches klipper_estimator exactly)
+    float sin_theta_d2 = std::sqrt(0.5f * (1.0f - junction_cos_theta));
+    float r = sin_theta_d2 / (1.0f - sin_theta_d2);
+    float tan_theta_d2 = sin_theta_d2 / std::sqrt(0.5f * (1.0f + junction_cos_theta));
+
+    // Calculate centripetal limits for BOTH blocks (klipper_estimator does both)
+    float move_centripetal_v2 = 0.5f * curr_block.distance * tan_theta_d2 * curr_block.acceleration;
+    float prev_move_centripetal_v2 = 0.5f * prev_block->distance * tan_theta_d2 * prev_block->acceleration;
 
     // Calculate extruder limit
     float ext_v2 = calculate_extruder_junction_v2(
@@ -331,18 +345,32 @@ void calculate_klipper_junction(
         curr_block.klipper.rate_e,
         instant_corner_velocity);
 
-    // Combined junction velocity is minimum of all limits
-    float max_start_v2 = std::min({jd_v2, cent_v2, ext_v2});
-
-    // Also limit by cruise velocities
-    max_start_v2 = std::min(max_start_v2, prev_block->klipper.max_cruise_v2);
+    // Combined junction velocity - matches klipper_estimator exactly:
+    // extruder_v2
+    //   .min(r * self.junction_deviation * self.acceleration)
+    //   .min(r * previous_move.junction_deviation * previous_move.acceleration)
+    //   .min(move_centripetal_v2)
+    //   .min(prev_move_centripetal_v2)
+    //   .min(self.max_cruise_v2)
+    //   .min(previous_move.max_cruise_v2)
+    //   .min(previous_move.max_start_v2 + previous_move.max_dv2)
+    float max_start_v2 = ext_v2;
+    max_start_v2 = std::min(max_start_v2, r * junction_deviation * curr_block.acceleration);
+    max_start_v2 = std::min(max_start_v2, r * prev_block->klipper.junction_deviation * prev_block->acceleration);
+    max_start_v2 = std::min(max_start_v2, move_centripetal_v2);
+    max_start_v2 = std::min(max_start_v2, prev_move_centripetal_v2);
     max_start_v2 = std::min(max_start_v2, curr_block.klipper.max_cruise_v2);
+    max_start_v2 = std::min(max_start_v2, prev_block->klipper.max_cruise_v2);
+    // CRITICAL: Also limit by what previous block can actually accelerate to
+    max_start_v2 = std::min(max_start_v2, prev_block->klipper.max_start_v2 + prev_block->klipper.max_dv2);
 
     curr_block.klipper.max_start_v2 = max_start_v2;
 
-    // Smoothed velocity uses accel_to_decel
-    // For now, set equal to max_start_v2 (proper smoothing in two-pass planner)
-    curr_block.klipper.max_smoothed_v2 = max_start_v2;
+    // Smoothed velocity - matches klipper_estimator exactly:
+    // self.max_smoothed_v2 = self.max_start_v2.min(previous_move.max_smoothed_v2 + previous_move.smoothed_dv2)
+    curr_block.klipper.max_smoothed_v2 = std::min(
+        max_start_v2,
+        prev_block->klipper.max_smoothed_v2 + prev_block->klipper.smoothed_dv2);
 }
 
 // ============================================================================
@@ -465,127 +493,107 @@ float limit_acceleration_by_extruder(
 // We only need to apply per-axis and extruder limits here based on block.acceleration.
 
 // ============================================================================
-// Two-Pass Velocity Planner (Deliverable 4)
+// Klipper Velocity Planner - matches klipper_estimator's MoveSequence::process()
 // ============================================================================
 
-// Structure to track delayed moves during backward pass
+// Structure to track delayed moves during velocity resolution
 struct DelayedMove {
-    size_t block_index;         // Index into blocks vector
-    float start_v2;             // Start velocity² constraint
-    float cruise_v2;            // Cruise velocity² (may be reduced)
-    bool can_finalize{false};   // True when end velocity is known
+    GCodeProcessor::TimeBlock* block;  // Pointer to block
+    float start_v2;                    // Start velocity² constraint
+    float end_v2;                      // End velocity² constraint
 };
 
-// Backward pass: propagate velocity limits from end to start
-// Sets max_start_v2 and max_cruise_v2 for each block
-void klipper_backward_pass(
+// Process moves to resolve velocities - matches klipper_estimator's process() exactly
+// This is a combined backward/forward pass that properly handles velocity smoothing
+void klipper_process_moves(
     std::vector<GCodeProcessor::TimeBlock>& blocks,
-    std::vector<DelayedMove>& delayed_moves)
+    size_t flush_count,  // How many blocks have already been finalized
+    bool partial)        // True for incremental processing, false for full flush
 {
     if (blocks.empty()) return;
+    if (flush_count == blocks.size()) return;  // Nothing to process
 
-    // Process from end to start
-    for (size_t i = blocks.size(); i > 0; --i) {
+    std::vector<DelayedMove> delayed;
+
+    float next_end_v2 = 0.0f;
+    float next_smoothed_v2 = 0.0f;
+    float peak_cruise_v2 = 0.0f;
+
+    size_t skip = partial ? flush_count : 0;
+    size_t new_flush_count = partial ? flush_count : blocks.size();
+
+    // Process from end to start (backward pass with integrated velocity resolution)
+    for (size_t i = blocks.size(); i > skip; --i) {
         size_t idx = i - 1;
         auto& block = blocks[idx];
 
-        // Skip non-Klipper blocks
-        if (!block.klipper.is_kinematic && block.klipper.rate_e == 0) {
-            continue;
-        }
-
-        // Get end velocity constraint
-        float end_v2;
-        if (idx == blocks.size() - 1) {
-            // Last block must end at zero
-            end_v2 = 0.0f;
-        } else {
-            // End velocity is next block's start velocity
-            end_v2 = blocks[idx + 1].klipper.max_start_v2;
-        }
-
-        // Calculate max start velocity from end velocity and acceleration
-        // Using v_start² = v_end² + 2*a*d (note: + because we're going backward)
-        float max_start_from_end = end_v2 + block.klipper.max_dv2;
-
-        // Start velocity is minimum of junction limit and kinematic limit
-        float new_start_v2 = std::min(block.klipper.max_start_v2, max_start_from_end);
-        block.klipper.max_start_v2 = new_start_v2;
-
-        // NOTE: Do NOT reduce max_cruise_v2 here! It's set from feedrate and should not change.
-        // The backward pass only updates max_start_v2 based on deceleration constraints.
-
-        // Check if this move needs to be delayed
-        // A move is delayed if we can't determine its velocity yet
-        // (In simplified form, we may not need delays for batch processing)
-    }
-}
-
-// Forward pass: finalize velocities from start to end
-// This resolves delayed moves and sets resolved_* fields
-// initial_velocity: velocity at start of batch (for batch continuity)
-void klipper_forward_pass(std::vector<GCodeProcessor::TimeBlock>& blocks, float initial_velocity = 0.0f)
-{
-    if (blocks.empty()) return;
-
-    float prev_end_v2 = initial_velocity * initial_velocity;  // Start with batch initial velocity
-
-    for (size_t i = 0; i < blocks.size(); ++i) {
-        auto& block = blocks[i];
-
-        // Skip non-Klipper blocks
-        if (!block.klipper.is_kinematic && block.klipper.rate_e == 0) {
+        // Skip non-move blocks
+        if (!block.klipper.is_kinematic && std::abs(block.klipper.rate_e) < 0.0001f) {
             block.klipper.resolved_start_v = 0.0f;
             block.klipper.resolved_cruise_v = 0.0f;
             block.klipper.resolved_end_v = 0.0f;
-            prev_end_v2 = 0.0f;
             continue;
         }
 
-        // Start velocity is constrained by previous end and junction limit
-        float start_v2 = std::min(prev_end_v2, block.klipper.max_start_v2);
+        // Calculate reachable velocities from next block
+        float reachable_start_v2 = next_end_v2 + block.klipper.max_dv2;
+        float start_v2 = std::min(block.klipper.max_start_v2, reachable_start_v2);
 
-        // Calculate achievable cruise velocity
-        float cruise_v2 = std::min(
-            block.klipper.max_cruise_v2,
-            start_v2 + block.klipper.max_dv2
-        );
+        float reachable_smoothed_v2 = next_smoothed_v2 + block.klipper.smoothed_dv2;
+        float smoothed_v2 = std::min(block.klipper.max_smoothed_v2, reachable_smoothed_v2);
 
-        // Get next block's start velocity limit for end velocity
-        float next_start_v2;
-        if (i + 1 < blocks.size()) {
-            next_start_v2 = blocks[i + 1].klipper.max_start_v2;
-        } else {
-            next_start_v2 = 0.0f;  // Last block ends at rest
-        }
+        // Check if smoothed velocity is the binding constraint (this is a "peak" in velocity)
+        if (smoothed_v2 < reachable_smoothed_v2) {
+            // This block constrains the velocity profile
+            if ((smoothed_v2 + block.klipper.smoothed_dv2 > next_smoothed_v2) || !delayed.empty()) {
+                // Calculate peak cruise velocity from smoothed constraints
+                peak_cruise_v2 = std::min(
+                    block.klipper.max_cruise_v2,
+                    (smoothed_v2 + reachable_smoothed_v2) * 0.5f);
 
-        // End velocity constrained by next junction and decel capability
-        float end_v2 = std::min(next_start_v2, cruise_v2);
-
-        // Verify end velocity is achievable from cruise
-        float max_end_from_cruise = cruise_v2;  // Can maintain or decelerate
-        end_v2 = std::min(end_v2, max_end_from_cruise);
-
-        // Also verify we can decelerate to end within the block distance
-        // Using v_end² = v_cruise² - 2*a*d_decel
-        // d_decel = (v_cruise² - v_end²) / (2*a)
-        // If d_decel > block.distance, we need to reduce cruise
-        float decel_accel = block.acceleration;
-        if (decel_accel > 0.0001f) {
-            float needed_decel_dist = (cruise_v2 - end_v2) / (2.0f * decel_accel);
-            if (needed_decel_dist > block.distance) {
-                // Reduce end velocity or cruise velocity
-                end_v2 = cruise_v2 - 2.0f * decel_accel * block.distance;
-                end_v2 = std::max(end_v2, 0.0f);
+                // Process delayed moves now that we know the peak
+                if (!delayed.empty()) {
+                    float mc_v2 = peak_cruise_v2;
+                    // Process delayed moves in reverse (forward direction)
+                    for (auto it = delayed.rbegin(); it != delayed.rend(); ++it) {
+                        mc_v2 = std::min(mc_v2, it->start_v2);
+                        // Set junction velocities
+                        it->block->klipper.resolved_start_v = std::sqrt(std::min(it->start_v2, mc_v2));
+                        it->block->klipper.resolved_cruise_v = std::sqrt(mc_v2);
+                        it->block->klipper.resolved_end_v = std::sqrt(std::min(it->end_v2, mc_v2));
+                    }
+                    delayed.clear();
+                }
             }
+
+            // Calculate and set this block's velocities
+            float cruise_v2 = std::min({
+                (start_v2 + reachable_start_v2) * 0.5f,
+                block.klipper.max_cruise_v2,
+                peak_cruise_v2
+            });
+
+            block.klipper.resolved_start_v = std::sqrt(std::min(start_v2, cruise_v2));
+            block.klipper.resolved_cruise_v = std::sqrt(cruise_v2);
+            block.klipper.resolved_end_v = std::sqrt(std::min(next_end_v2, cruise_v2));
+        } else {
+            // This move needs to be delayed - we don't know its final velocity yet
+            delayed.push_back({&block, start_v2, next_end_v2});
         }
 
-        // Store resolved velocities (convert from v² to v)
-        block.klipper.resolved_start_v = std::sqrt(start_v2);
-        block.klipper.resolved_cruise_v = std::sqrt(cruise_v2);
-        block.klipper.resolved_end_v = std::sqrt(end_v2);
+        next_end_v2 = start_v2;
+        next_smoothed_v2 = smoothed_v2;
+    }
 
-        prev_end_v2 = end_v2;
+    // Process any remaining delayed moves (for blocks at the start of the sequence)
+    if (!delayed.empty()) {
+        float mc_v2 = peak_cruise_v2 > 0.0f ? peak_cruise_v2 : delayed.front().block->klipper.max_cruise_v2;
+        for (auto it = delayed.rbegin(); it != delayed.rend(); ++it) {
+            mc_v2 = std::min(mc_v2, it->start_v2);
+            it->block->klipper.resolved_start_v = std::sqrt(std::min(it->start_v2, mc_v2));
+            it->block->klipper.resolved_cruise_v = std::sqrt(mc_v2);
+            it->block->klipper.resolved_end_v = std::sqrt(std::min(it->end_v2, mc_v2));
+        }
     }
 }
 
@@ -899,7 +907,6 @@ void GCodeProcessor::TimeMachine::reset()
     time = 0.0f;
     square_corner_velocity = 5.0f;
     klipper_mode = false;
-    klipper_prev_batch_end_v = 0.0f;
     collect_kinematics = false;
     stop_times = std::vector<StopTime>();
     curr.reset();
@@ -1051,7 +1058,7 @@ void GCodeProcessor::TimeMachine::calculate_time_legacy(size_t keep_last_n_block
         blocks.clear();
 }
 
-// Klipper two-pass velocity planning implementation (Deliverable 4)
+// Klipper velocity planning implementation - matches klipper_estimator
 void GCodeProcessor::TimeMachine::calculate_time_klipper(size_t keep_last_n_blocks, float additional_time)
 {
     if (!enabled || blocks.size() < 1)
@@ -1059,14 +1066,14 @@ void GCodeProcessor::TimeMachine::calculate_time_klipper(size_t keep_last_n_bloc
 
     assert(keep_last_n_blocks <= blocks.size());
 
-    // Step 1: Backward pass - propagate velocity constraints
-    std::vector<DelayedMove> delayed;
-    klipper_backward_pass(blocks, delayed);
+    // Determine if this is a partial or full flush
+    bool partial = (keep_last_n_blocks > 0);
 
-    // Step 2: Forward pass - resolve velocities with batch continuity
-    klipper_forward_pass(blocks, klipper_prev_batch_end_v);
+    // Process moves using the new algorithm that matches klipper_estimator
+    // This handles both velocity constraint propagation and resolution in one pass
+    klipper_process_moves(blocks, 0, partial);
 
-    // Step 3: Calculate time for each block and accumulate
+    // Calculate time for each block and accumulate
     size_t n_blocks_process = blocks.size() - keep_last_n_blocks;
     for (size_t i = 0; i < n_blocks_process; ++i) {
         TimeBlock& block = blocks[i];
@@ -1084,11 +1091,6 @@ void GCodeProcessor::TimeMachine::calculate_time_klipper(size_t keep_last_n_bloc
 
         // Accumulate time into all categories (Deliverable 6: Integration)
         accumulate_block_time(block, block_time);
-    }
-
-    // Save end velocity of last processed block for next batch
-    if (n_blocks_process > 0) {
-        klipper_prev_batch_end_v = blocks[n_blocks_process - 1].klipper.resolved_end_v;
     }
 
     // Erase processed blocks
@@ -4086,8 +4088,12 @@ void GCodeProcessor::process_G1(const GCodeReader::GCodeLine& line, const std::o
                 block.klipper.max_dv2 = 2.0f * limited_accel * block.distance;
 
                 // Compute smoothed_dv2 using accel_to_decel
-                block.klipper.smoothed_dv2 = 2.0f *
-                    machine.klipper_state.accel_to_decel * block.distance;
+                // CRITICAL: Clamp to max_dv2 to match klipper_estimator's limit_speed()
+                // Without this, smoothed_dv2 > max_dv2 when acceleration is limited,
+                // causing the planner to allow higher velocities than achievable
+                block.klipper.smoothed_dv2 = std::min(
+                    2.0f * machine.klipper_state.accel_to_decel * block.distance,
+                    block.klipper.max_dv2);
             }
 
             // Get previous block for junction calculation
@@ -4669,8 +4675,12 @@ void  GCodeProcessor::process_G2_G3(const GCodeReader::GCodeLine& line)
                 block.klipper.max_dv2 = 2.0f * limited_accel * block.distance;
 
                 // Compute smoothed_dv2 using accel_to_decel
-                block.klipper.smoothed_dv2 = 2.0f *
-                    machine.klipper_state.accel_to_decel * block.distance;
+                // CRITICAL: Clamp to max_dv2 to match klipper_estimator's limit_speed()
+                // Without this, smoothed_dv2 > max_dv2 when acceleration is limited,
+                // causing the planner to allow higher velocities than achievable
+                block.klipper.smoothed_dv2 = std::min(
+                    2.0f * machine.klipper_state.accel_to_decel * block.distance,
+                    block.klipper.max_dv2);
             }
 
             // Get previous block for junction calculation
@@ -5145,6 +5155,13 @@ void GCodeProcessor::process_SET_VELOCITY_LIMIT(const GCodeReader::GCodeLine& li
             set_option_value(m_time_processor.machine_limits.machine_max_jerk_x, i, _jerk);
             set_option_value(m_time_processor.machine_limits.machine_max_jerk_y, i, _jerk);
             m_time_processor.machines[i].square_corner_velocity = _jerk;
+            // Update junction_deviation when SCV changes (matches klipper_estimator's set_square_corner_velocity)
+            // junction_deviation = SCV² * (√2 - 1) / acceleration
+            if (m_time_processor.machines[i].estimator_mode == EstimatorMode::Klipper) {
+                float accel = get_acceleration(static_cast<PrintEstimatedStatistics::ETimeMode>(i));
+                m_time_processor.machines[i].klipper_state.junction_deviation =
+                    compute_junction_deviation(_jerk, accel);
+            }
         }
     }
 
@@ -5159,6 +5176,15 @@ void GCodeProcessor::process_SET_VELOCITY_LIMIT(const GCodeReader::GCodeLine& li
         for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i) {
             set_acceleration(static_cast<PrintEstimatedStatistics::ETimeMode>(i), _accl);
             set_travel_acceleration(static_cast<PrintEstimatedStatistics::ETimeMode>(i), _accl);
+            // Update Klipper state when acceleration changes
+            // Both accel_to_decel and junction_deviation depend on max_acceleration
+            if (m_time_processor.machines[i].estimator_mode == EstimatorMode::Klipper) {
+                m_time_processor.machines[i].klipper_state.accel_to_decel =
+                    compute_accel_to_decel(_accl, m_time_processor.machines[i].minimum_cruise_ratio);
+                // junction_deviation = SCV² * (√2 - 1) / acceleration
+                m_time_processor.machines[i].klipper_state.junction_deviation =
+                    compute_junction_deviation(m_time_processor.machines[i].square_corner_velocity, _accl);
+            }
         }
     }
 
@@ -5183,8 +5209,16 @@ void GCodeProcessor::process_SET_VELOCITY_LIMIT(const GCodeReader::GCodeLine& li
             ratio = std::stof(matches[1]);
         } catch (...) {}
         m_time_processor.machine_limits.klipper_cruise_ratio.value = ratio;
-        for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i)
+        for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i) {
             m_time_processor.machines[i].minimum_cruise_ratio = ratio;
+            // Update accel_to_decel when minimum_cruise_ratio changes
+            // accel_to_decel = max_accel * (1 - minimum_cruise_ratio)
+            if (m_time_processor.machines[i].estimator_mode == EstimatorMode::Klipper) {
+                float accel = get_acceleration(static_cast<PrintEstimatedStatistics::ETimeMode>(i));
+                m_time_processor.machines[i].klipper_state.accel_to_decel =
+                    compute_accel_to_decel(accel, ratio);
+            }
+        }
     }
 }
 
