@@ -1672,6 +1672,7 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
     }
 
     m_disable_m73 = config.disable_m73;
+    m_print_start_time = config.print_start_time;
 
     const ConfigOptionFloat* initial_layer_print_height = config.option<ConfigOptionFloat>("initial_layer_print_height");
     if (initial_layer_print_height != nullptr)
@@ -1879,6 +1880,9 @@ void GCodeProcessor::apply_config(const DynamicPrintConfig& config)
     if (machine_tool_change_time != nullptr)
         m_time_processor.machine_tool_change_time = static_cast<float>(machine_tool_change_time->value);
 
+    const ConfigOptionInt* print_start_time = config.option<ConfigOptionInt>("print_start_time");
+    if (print_start_time != nullptr)
+        m_print_start_time = print_start_time->value;
 
     if (m_flavor == gcfMarlinLegacy || m_flavor == gcfMarlinFirmware || m_flavor == gcfKlipper) {
         const ConfigOptionFloats* machine_max_acceleration_x = config.option<ConfigOptionFloats>("machine_max_acceleration_x");
@@ -6529,8 +6533,9 @@ void GCodeProcessor::update_estimated_times_stats()
 {
     auto update_mode = [this](PrintEstimatedStatistics::ETimeMode mode) {
         PrintEstimatedStatistics::Mode& data = m_result.print_statistics.modes[static_cast<size_t>(mode)];
-        data.time = get_time(mode);
-        data.prepare_time = get_prepare_time(mode);
+        float start_time_offset = static_cast<float>(m_print_start_time);
+        data.time = get_time(mode) + start_time_offset;
+        data.prepare_time = get_prepare_time(mode) + start_time_offset;
         data.custom_gcode_times = get_custom_gcode_times(mode, true);
         data.moves_times = get_moves_time(mode);
         data.roles_times = get_roles_time(mode);

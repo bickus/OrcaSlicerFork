@@ -875,6 +875,7 @@ class Print;
         float m_preheat_time;
         int m_preheat_steps;
         bool m_disable_m73;
+        int m_print_start_time{ 0 };
 #if ENABLE_GCODE_VIEWER_STATISTICS
         std::chrono::time_point<std::chrono::high_resolution_clock> m_start_time;
 #endif // ENABLE_GCODE_VIEWER_STATISTICS
