@@ -143,6 +143,27 @@ class Print;
         ConflictResultOpt conflict_result;
         BedMatchResult  bed_match_result;
 
+        // Speed modifier tracking for tooltip display
+        struct SpeedModifierEntry {
+            enum class Type : uint8_t {
+                None = 0,
+                FirstLayer,         // initial_layer_speed applied
+                SlowDownLayers,     // interpolated speed for slow_down_layers
+                Overhang,           // overhang speed reduction (value = percentage 0-100)
+                LayerTimeCooling,   // slow_down_for_layer_cooling
+                VolumetricCap,      // filament_max_volumetric_speed limit
+                ResonanceAvoidance, // resonance_avoidance clamping
+                SmallPerimeter,     // small_perimeter_speed applied
+                ScarfJoint,         // scarf_joint_speed limit
+                CurledEdge          // slowdown_for_curled_perimeters
+            };
+            Type type{ Type::None };
+            float value{ 0.0f };        // percentage for overhang, speed/reduction for others
+            float speed_after{ 0.0f };  // speed after this modifier applied (mm/s)
+        };
+
+        static constexpr size_t MaxSpeedModifiers = 4;
+
         struct SettingsIds
         {
             std::string print;
@@ -213,6 +234,13 @@ class Print;
             };
 
             Kinematics kinematics;
+
+            // Speed modifier tracking for tooltip display in Speed tab
+            float base_speed{ 0.0f };                                      // original speed before modifiers (mm/s)
+            SpeedModifierEntry speed_modifiers[MaxSpeedModifiers];         // chain of applied modifiers
+            uint8_t speed_modifier_count{ 0 };                             // number of valid entries
+
+            bool has_speed_modifiers() const { return speed_modifier_count > 0; }
 
             float volumetric_rate() const { return feedrate * mm3_per_mm; }
             //BBS: new function to support arc move
@@ -377,6 +405,7 @@ class Print;
             Wipe_Tower_Start,
             Wipe_Tower_End,
             PA_Change,
+            Speed_Modifiers,  // ;SPEED_MODS:<base>|<type>:<val>:<after>|...
         };
 
         static const std::string& reserved_tag(ETags tag) { return s_IsBBLPrinter ? Reserved_Tags[static_cast<unsigned char>(tag)] : Reserved_Tags_compatible[static_cast<unsigned char>(tag)]; }
@@ -845,6 +874,10 @@ class Print;
         float m_height; // mm
         float m_forced_width; // mm
         float m_forced_height; // mm
+        // Speed modifier tracking for tooltip display
+        float m_speed_mod_base{ 0.0f };
+        GCodeProcessorResult::SpeedModifierEntry m_speed_mod_entries[GCodeProcessorResult::MaxSpeedModifiers];
+        uint8_t m_speed_mod_count{ 0 };
         float m_mm3_per_mm;
         float m_travel_dist; // mm
         float m_fan_speed; // percentage
@@ -980,6 +1013,8 @@ class Print;
 
         // Process tags embedded into comments
         void process_tags(const std::string_view comment, bool producers_enabled);
+        // Process speed modifier comments from inline G1 comments
+        void process_inline_speed_modifier_comment(const std::string_view comment);
         bool process_producers_tags(const std::string_view comment);
         bool process_bambuslicer_tags(const std::string_view comment);
         bool process_cura_tags(const std::string_view comment);

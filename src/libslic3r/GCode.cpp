@@ -4757,7 +4757,7 @@ std::string GCode::extrude_loop(ExtrusionLoop loop, std::string description, dou
     loop.clip_end(clip_length, &paths);
     if (paths.empty()) return "";
 
-    // SoftFever: check loop lenght for small perimeter. 
+    // SoftFever: check loop lenght for small perimeter.
     double small_peri_speed = -1;
     if (speed == -1 && loop.length() <= SMALL_PERIMETER_LENGTH(m_config.small_perimeter_threshold.value)) {
         if(m_config.small_perimeter_speed == 0)
@@ -4765,6 +4765,8 @@ std::string GCode::extrude_loop(ExtrusionLoop loop, std::string description, dou
         else
             small_peri_speed = m_config.small_perimeter_speed.get_abs_value(m_config.outer_wall_speed);
     }
+    // Track small perimeter speed for modifier tooltip
+    m_small_perimeter_speed = small_peri_speed;
 
     // extrude along the path
     std::string gcode;
@@ -5246,6 +5248,9 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 {
     std::string gcode;
 
+    // Reset speed modifier tracker for this extrusion
+    m_speed_modifier_tracker.reset();
+
     if (is_bridge(path.role()))
         description += " (bridge)";
 
@@ -5391,16 +5396,28 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
 
     // set speed
+    bool scarf_joint_applied = false;
+    double scarf_joint_base_speed = 0.0;
     if (speed == -1) {
         if (path.role() == erPerimeter) {
             speed = m_config.get_abs_value("inner_wall_speed");
             if (sloped) {
-                speed = std::min(speed, m_config.scarf_joint_speed.get_abs_value(m_config.get_abs_value("inner_wall_speed")));
+                double scarf_speed = m_config.scarf_joint_speed.get_abs_value(m_config.get_abs_value("inner_wall_speed"));
+                if (scarf_speed < speed) {
+                    scarf_joint_base_speed = speed;
+                    speed = scarf_speed;
+                    scarf_joint_applied = true;
+                }
             }
         } else if (path.role() == erExternalPerimeter) {
             speed = m_config.get_abs_value("outer_wall_speed");
             if (sloped) {
-                speed = std::min(speed, m_config.scarf_joint_speed.get_abs_value(m_config.get_abs_value("outer_wall_speed")));
+                double scarf_speed = m_config.scarf_joint_speed.get_abs_value(m_config.get_abs_value("outer_wall_speed"));
+                if (scarf_speed < speed) {
+                    scarf_joint_base_speed = speed;
+                    speed = scarf_speed;
+                    scarf_joint_applied = true;
+                }
             }
         } 
         else if(path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill) {
@@ -5432,11 +5449,55 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     //BBS: if not set the speed, then use the filament_max_volumetric_speed directly
     if (speed == 0)
         speed = EXTRUDER_CONFIG(filament_max_volumetric_speed) / _mm3_per_mm;
+
+    // Check if small perimeter speed was applied (speed was passed in from extrude_loop)
+    bool is_small_perimeter = (m_small_perimeter_speed > 0 && std::abs(speed - m_small_perimeter_speed) < 0.5);
+
+    // Track base speed before any modifiers
+    // If small perimeter, calculate what the base speed would have been
+    double base_speed_for_tracking = speed;
+    if (is_small_perimeter && is_perimeter(path.role()) && !is_bridge(path.role())) {
+        // Calculate base speed from role
+        if (path.role() == erPerimeter)
+            base_speed_for_tracking = m_config.get_abs_value("inner_wall_speed");
+        else if (path.role() == erExternalPerimeter)
+            base_speed_for_tracking = m_config.get_abs_value("outer_wall_speed");
+    }
+    m_speed_modifier_tracker.base_speed = static_cast<float>(base_speed_for_tracking);
+    double speed_before_modifier = speed;
+
+    // Track small perimeter modifier if applied
+    if (is_small_perimeter && std::abs(base_speed_for_tracking - speed) > 0.5) {
+        m_speed_modifier_tracker.add(
+            GCodeProcessorResult::SpeedModifierEntry::Type::SmallPerimeter,
+            static_cast<float>(base_speed_for_tracking - speed),
+            static_cast<float>(speed));
+    }
+
+    // Track scarf joint modifier if applied
+    if (scarf_joint_applied && scarf_joint_base_speed > 0) {
+        // Update base speed to reflect the original before scarf joint
+        m_speed_modifier_tracker.base_speed = static_cast<float>(scarf_joint_base_speed);
+        m_speed_modifier_tracker.add(
+            GCodeProcessorResult::SpeedModifierEntry::Type::ScarfJoint,
+            static_cast<float>(scarf_joint_base_speed - speed),
+            static_cast<float>(speed));
+    }
+
     if (this->on_first_layer()) {
         //BBS: for solid infill of initial layer, speed can be higher as long as
         //wall lines have be attached
-        if (path.role() != erBottomSurface)
+        if (path.role() != erBottomSurface) {
             speed = m_config.get_abs_value("initial_layer_speed");
+            // Track first layer modifier
+            if (std::abs(speed - speed_before_modifier) > 0.5) {
+                m_speed_modifier_tracker.add(
+                    GCodeProcessorResult::SpeedModifierEntry::Type::FirstLayer,
+                    static_cast<float>(speed_before_modifier - speed),
+                    static_cast<float>(speed));
+                speed_before_modifier = speed;
+            }
+        }
     }
     else if(m_config.slow_down_layers > 1){
         const auto _layer = layer_id();
@@ -5446,10 +5507,19 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                     ? m_config.get_abs_value("initial_layer_speed")
                     : m_config.get_abs_value("initial_layer_infill_speed");
             if (first_layer_speed < speed) {
-                speed = std::min(
+                double new_speed = std::min(
                     speed,
                     Slic3r::lerp(first_layer_speed, speed,
                                  (double)_layer / m_config.slow_down_layers));
+                // Track slow down layers modifier
+                if (std::abs(new_speed - speed) > 0.5) {
+                    m_speed_modifier_tracker.add(
+                        GCodeProcessorResult::SpeedModifierEntry::Type::SlowDownLayers,
+                        static_cast<float>(speed - new_speed),
+                        static_cast<float>(new_speed));
+                }
+                speed = new_speed;
+                speed_before_modifier = speed;
             }
         }
     }
@@ -5471,7 +5541,16 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     //}
     if (EXTRUDER_CONFIG(filament_max_volumetric_speed) > 0) {
         // cap speed with max_volumetric_speed anyway (even if user is not using autospeed)
-        speed = std::min(speed, EXTRUDER_CONFIG(filament_max_volumetric_speed) / _mm3_per_mm);
+        double capped_speed = std::min(speed, EXTRUDER_CONFIG(filament_max_volumetric_speed) / _mm3_per_mm);
+        // Track volumetric cap modifier
+        if (std::abs(capped_speed - speed) > 0.5) {
+            m_speed_modifier_tracker.add(
+                GCodeProcessorResult::SpeedModifierEntry::Type::VolumetricCap,
+                static_cast<float>(speed - capped_speed),
+                static_cast<float>(capped_speed));
+        }
+        speed = capped_speed;
+        speed_before_modifier = speed;
     }
     // ORCA: resonance‑avoidance on short external perimeters
 {
@@ -5479,7 +5558,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     if (path.role() == erExternalPerimeter
         && m_config.resonance_avoidance.value) {
 
-        // if our original speed was above “max”, disable RA for this loop
+        // if our original speed was above "max", disable RA for this loop
         if (ref_speed > m_config.max_resonance_avoidance_speed.value) {
             m_resonance_avoidance = false;
         }
@@ -5492,10 +5571,18 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             );
         }
 
-        // if still in avoidance mode and under “max”, clamp to “min”
+        // if still in avoidance mode and under "max", clamp to "min"
         if (m_resonance_avoidance
             && speed <= m_config.max_resonance_avoidance_speed.value) {
-            speed = std::min(speed, m_config.min_resonance_avoidance_speed.value);
+            double clamped_speed = std::min(speed, m_config.min_resonance_avoidance_speed.value);
+            // Track resonance avoidance modifier
+            if (std::abs(clamped_speed - speed) > 0.5) {
+                m_speed_modifier_tracker.add(
+                    GCodeProcessorResult::SpeedModifierEntry::Type::ResonanceAvoidance,
+                    static_cast<float>(speed - clamped_speed),
+                    static_cast<float>(clamped_speed));
+            }
+            speed = clamped_speed;
         }
 
         // reset flag for next segment
@@ -5813,6 +5900,10 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             // ORCA: End of adaptive PA code segment
         }
         
+        // Emit speed modifier comment for tooltip display BEFORE setting speed
+        // so the modifiers are parsed by GCodeProcessor before the G1 commands
+        gcode += format_speed_modifier_comment();
+
         gcode += m_writer.set_speed(F, "", comment);
         {
             if (m_enable_cooling_markers) {
@@ -5829,6 +5920,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
                 apply_role_based_fan_speed();
             }
+
             // BBS: use G1 if not enable arc fitting or has no arc fitting result or in spiral_mode mode or we are doing sloped extrusion
             // Attention: G2 and G3 is not supported in spiral_mode mode
             if (!m_config.enable_arc_fitting || path.polyline.fitting_result.empty() || m_config.spiral_mode || sloped != nullptr) {
@@ -5941,6 +6033,73 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             Polyline l(p);
             total_length = l.length() * SCALING_FACTOR;
         }
+
+        // Track overhang base speed for variable speed paths
+        bool is_external = is_external_perimeter(path.role());
+        double overhang_base_speed = is_external ? m_config.get_abs_value("outer_wall_speed") : m_config.get_abs_value("inner_wall_speed");
+        if (overhang_base_speed == 0)
+            overhang_base_speed = EXTRUDER_CONFIG(filament_max_volumetric_speed) / _mm3_per_mm;
+
+        // Helper to emit SPEED_MODS comment including tracked modifiers + overhang/curled edge
+        auto emit_overhang_modifier = [&](float overlap, float speed_after, bool is_curled_edge) {
+            // Always emit base speed from tracker (includes FirstLayer, VolumetricCap, etc.)
+            float base_speed = m_speed_modifier_tracker.base_speed > 0
+                ? m_speed_modifier_tracker.base_speed
+                : static_cast<float>(overhang_base_speed);
+
+            std::string mod_str = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Speed_Modifiers);
+            mod_str += std::to_string(static_cast<int>(base_speed));
+
+            // Type to code helper
+            auto type_to_code = [](GCodeProcessorResult::SpeedModifierEntry::Type type) -> std::string {
+                using Type = GCodeProcessorResult::SpeedModifierEntry::Type;
+                switch (type) {
+                    case Type::FirstLayer:         return "FL";
+                    case Type::SlowDownLayers:     return "SL";
+                    case Type::Overhang:           return "OH";
+                    case Type::LayerTimeCooling:   return "LC";
+                    case Type::VolumetricCap:      return "VC";
+                    case Type::ResonanceAvoidance: return "RA";
+                    case Type::SmallPerimeter:     return "SP";
+                    case Type::ScarfJoint:         return "SJ";
+                    case Type::CurledEdge:         return "CE";
+                    default:                       return "??";
+                }
+            };
+
+            // Add tracked modifiers first (FirstLayer, VolumetricCap, etc.)
+            for (uint8_t i = 0; i < m_speed_modifier_tracker.count; ++i) {
+                const auto& entry = m_speed_modifier_tracker.entries[i];
+                mod_str += "|";
+                mod_str += type_to_code(entry.type);
+                mod_str += ":";
+                mod_str += std::to_string(static_cast<int>(entry.value));
+                mod_str += ":";
+                mod_str += std::to_string(static_cast<int>(entry.speed_after));
+            }
+
+            // Add overhang or curled edge modifier
+            float overhang_pct = (1.0f - overlap) * 100.0f;
+            if (overhang_pct > 5.0f || is_curled_edge) {
+                mod_str += "|";
+                if (is_curled_edge) {
+                    mod_str += "CE:";
+                    mod_str += std::to_string(static_cast<int>(overhang_base_speed - speed_after));
+                } else {
+                    mod_str += "OH:";
+                    mod_str += std::to_string(static_cast<int>(overhang_pct));
+                }
+                mod_str += ":";
+                mod_str += std::to_string(static_cast<int>(speed_after));
+            }
+
+            mod_str += "\n";
+            gcode += mod_str;
+        };
+
+        // Emit initial overhang modifier
+        emit_overhang_modifier(new_points[0].overlap, static_cast<float>(new_points[0].speed), new_points[0].curled_edge_slowdown);
+
         gcode += m_writer.set_speed(last_set_speed, "", comment);
         Vec2d prev = this->point_to_gcode_quantized(new_points[0].p);
         bool pre_fan_enabled = false;
@@ -6023,6 +6182,8 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             // Ignore small speed variations - emit speed change if the delta between current and new is greater than 60mm/min / 1mm/sec
             // Reset speed to F if delta to F is less than 1mm/sec
             if ((std::abs(last_set_speed - new_speed) > 60)) {
+                // Emit overhang or curled edge modifier for the new speed
+                emit_overhang_modifier(pre_processed_point.overlap, static_cast<float>(pre_processed_point.speed), pre_processed_point.curled_edge_slowdown);
                 gcode += m_writer.set_speed(new_speed, "", comment);
                 last_set_speed = new_speed;
             } else if ((std::abs(F - new_speed) <= 60)) {
@@ -6896,5 +7057,47 @@ void GCode::ObjectByExtruder::Island::Region::append(const Type type, const Extr
 // Index into std::vector<LayerToPrint>, which contains Object and Support layers for the current print_z, collected for
 // a single object, or for possibly multiple objects with multiple instances.
 
+// Format speed modifier comment for G-code
+// Format: ;SPEED_MODS:<base>|<type>:<val>:<after>|...
+// Always emits base speed to ensure proper reset between paths
+std::string GCode::format_speed_modifier_comment() const
+{
+    // Always emit base speed - this ensures paths without modifiers
+    // don't inherit modifiers from the previous path
+    if (m_speed_modifier_tracker.base_speed <= 0)
+        return {};
+
+    std::string result = ";" + GCodeProcessor::reserved_tag(GCodeProcessor::ETags::Speed_Modifiers);
+    result += std::to_string(static_cast<int>(m_speed_modifier_tracker.base_speed));
+
+    auto type_to_code = [](GCodeProcessorResult::SpeedModifierEntry::Type type) -> std::string {
+        using Type = GCodeProcessorResult::SpeedModifierEntry::Type;
+        switch (type) {
+            case Type::FirstLayer:         return "FL";
+            case Type::SlowDownLayers:     return "SL";
+            case Type::Overhang:           return "OH";
+            case Type::LayerTimeCooling:   return "LC";
+            case Type::VolumetricCap:      return "VC";
+            case Type::ResonanceAvoidance: return "RA";
+            case Type::SmallPerimeter:     return "SP";
+            case Type::ScarfJoint:         return "SJ";
+            case Type::CurledEdge:         return "CE";
+            default:                       return "??";
+        }
+    };
+
+    for (uint8_t i = 0; i < m_speed_modifier_tracker.count; ++i) {
+        const auto& entry = m_speed_modifier_tracker.entries[i];
+        result += "|";
+        result += type_to_code(entry.type);
+        result += ":";
+        result += std::to_string(static_cast<int>(entry.value));
+        result += ":";
+        result += std::to_string(static_cast<int>(entry.speed_after));
+    }
+
+    result += "\n";
+    return result;
+}
 
 } // namespace Slic3r
