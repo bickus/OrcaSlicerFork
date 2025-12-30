@@ -833,10 +833,11 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
     };
 
     auto bridge_flow_for_role = [&](const LayerRegion &layerm, FlowRole extrusion_role, bool is_thick_bridge, ExtrusionRole extrusion_role_id) -> Flow {
-        if (!is_thick_bridge && (extrusion_role_id == erBridgeInfill || extrusion_role_id == erInternalBridgeInfill)) {
+        if (!is_thick_bridge && (extrusion_role_id == erBridgeInfill || extrusion_role_id == erInternalBridgeInfill ||
+                                  extrusion_role_id == erExtraBridgeInfill || extrusion_role_id == erExtraInternalBridgeInfill)) {
             const PrintRegionConfig &region_config = layerm.region().config();
             const ConfigOptionFloatOrPercent *width_opt =
-                (extrusion_role_id == erBridgeInfill) ? &region_config.bridge_infill_line_width : &region_config.internal_bridge_infill_line_width;
+                (extrusion_role_id == erBridgeInfill || extrusion_role_id == erExtraBridgeInfill) ? &region_config.bridge_infill_line_width : &region_config.internal_bridge_infill_line_width;
             if (!width_opt->percent && width_opt->value == 0.)
                 width_opt = &region_config.internal_solid_infill_line_width;
             const PrintConfig &print_config = layer.object()->print()->config();
@@ -897,7 +898,11 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 
 				params.extrusion_role = erInternalInfill;
                 if (is_bridge) {
-                    if (surface.is_internal_bridge())
+                    if (surface.surface_type == stInternalAfterExternalBridge)
+                        params.extrusion_role = erExtraBridgeInfill;
+                    else if (surface.surface_type == stSecondInternalBridge)
+                        params.extrusion_role = erExtraInternalBridgeInfill;
+                    else if (surface.is_internal_bridge())
                         params.extrusion_role = erInternalBridgeInfill;
                     else
                         params.extrusion_role = erBridgeInfill;
@@ -1048,7 +1053,8 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 		if (fill.expolygons.empty() || fill.region_id == size_t(-1))
 			continue;
 		// Check if this is a bridge fill
-		if (fill.params.extrusion_role == erBridgeInfill || fill.params.extrusion_role == erInternalBridgeInfill) {
+		if (fill.params.extrusion_role == erBridgeInfill || fill.params.extrusion_role == erInternalBridgeInfill ||
+		    fill.params.extrusion_role == erExtraBridgeInfill || fill.params.extrusion_role == erExtraInternalBridgeInfill) {
 			const LayerRegion &layerm = *layer.regions()[fill.region_id];
 			const PrintRegionConfig &region_config = layerm.region().config();
 			double bridge_overlap_pct = region_config.bridge_infill_wall_overlap.value;
@@ -1063,12 +1069,12 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 				// Get the appropriate bridge line width based on extrusion role
 				// Bridge overlap percentage is relative to the bridge infill line width
 				double bridge_line_width;
-				if (fill.params.extrusion_role == erBridgeInfill) {
+				if (fill.params.extrusion_role == erBridgeInfill || fill.params.extrusion_role == erExtraBridgeInfill) {
 					bridge_line_width = region_config.bridge_infill_line_width.get_abs_value(nozzle_diameter);
 					// If 0, falls back to internal solid infill width
 					if (bridge_line_width == 0)
 						bridge_line_width = region_config.internal_solid_infill_line_width.get_abs_value(nozzle_diameter);
-				} else { // erInternalBridgeInfill
+				} else { // erInternalBridgeInfill or erExtraInternalBridgeInfill
 					bridge_line_width = region_config.internal_bridge_infill_line_width.get_abs_value(nozzle_diameter);
 					// If 0, falls back to internal solid infill width
 					if (bridge_line_width == 0)

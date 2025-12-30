@@ -5309,7 +5309,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             double bridge_acc = 0.0;
             if (is_bridge(path.role())) {
                 const double external_bridge_acc = m_config.get_abs_value("bridge_acceleration");
-                if (path.role() == erInternalBridgeInfill) {
+                if (path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill) {
                     const double internal_bridge_acc = m_config.get_abs_value("internal_bridge_acceleration");
                     bridge_acc = internal_bridge_acc > 0.0 ? internal_bridge_acc : external_bridge_acc;
                 } else {
@@ -5343,7 +5343,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         } else {
             double bridge_jerk = 0.0;
             if (is_bridge(path.role())) {
-                if (path.role() == erInternalBridgeInfill) {
+                if (path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill) {
                     bridge_jerk = (m_config.internal_bridge_jerk.value > 0.0) ? m_config.internal_bridge_jerk.value : m_config.infill_jerk.value;
                 } else {
                     bridge_jerk = (m_config.bridge_jerk.value > 0.0) ? m_config.bridge_jerk.value : m_config.infill_jerk.value;
@@ -5384,7 +5384,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         _mm3_per_mm *= m_config.top_solid_infill_flow_ratio;
     else if (path.role() == erBottomSurface)
         _mm3_per_mm *= m_config.bottom_solid_infill_flow_ratio;
-    else if (path.role() == erInternalBridgeInfill)
+    else if (path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill)
         _mm3_per_mm *= m_config.internal_bridge_flow;
     else if(sloped)
         _mm3_per_mm *= m_config.scarf_joint_flow_ratio;
@@ -5420,9 +5420,9 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                 }
             }
         } 
-        else if(path.role() == erInternalBridgeInfill) {
+        else if(path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill) {
             speed = m_config.get_abs_value("internal_bridge_speed");
-        } else if (path.role() == erOverhangPerimeter || path.role() == erSupportTransition || path.role() == erBridgeInfill) {
+        } else if (path.role() == erOverhangPerimeter || path.role() == erSupportTransition || path.role() == erBridgeInfill || path.role() == erExtraBridgeInfill) {
             speed = m_config.get_abs_value("bridge_speed");
         } else if (path.role() == erInternalInfill) {
             speed = m_config.get_abs_value("sparse_infill_speed");
@@ -5912,10 +5912,10 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                     // perimeter
                     append_role_based_fan_marker(erOverhangPerimeter, "_OVERHANG"sv,
                                                  (overhang_fan_threshold == Overhang_threshold_none && is_external_perimeter(path.role())) ||
-                                                 (path.role() == erBridgeInfill || path.role() == erOverhangPerimeter)); // ORCA: Add support for separate internal bridge fan speed control
+                                                 (path.role() == erBridgeInfill || path.role() == erExtraBridgeInfill || path.role() == erOverhangPerimeter)); // ORCA: Add support for separate internal bridge fan speed control
 
                     // ORCA: Add support for separate internal bridge fan speed control
-                    append_role_based_fan_marker(erInternalBridgeInfill, "_INTERNAL_BRIDGE"sv, path.role() == erInternalBridgeInfill);
+                    append_role_based_fan_marker(erInternalBridgeInfill, "_INTERNAL_BRIDGE"sv, path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill);
                 }
 
                 apply_role_based_fan_speed();
@@ -6107,7 +6107,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         if( m_enable_cooling_markers && enable_overhang_bridge_fan)
             pre_fan_enabled = check_overhang_fan(new_points[0].overlap, path.role());
         
-        if(path.role() == erInternalBridgeInfill) // ORCA: Add support for separate internal bridge fan speed control
+        if(path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill) // ORCA: Add support for separate internal bridge fan speed control
             pre_fan_enabled = true;
 
         double path_length = 0.;
@@ -6123,7 +6123,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                     pre_fan_enabled = cur_fan_enabled;
 
                     // ORCA: Add support for separate internal bridge fan speed control
-                    append_role_based_fan_marker(erInternalBridgeInfill, "_INTERNAL_BRIDGE"sv, path.role() == erInternalBridgeInfill);
+                    append_role_based_fan_marker(erInternalBridgeInfill, "_INTERNAL_BRIDGE"sv, path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill);
                 }
 
                 apply_role_based_fan_speed();
@@ -6237,7 +6237,9 @@ std::string GCode::extrusion_role_to_string_for_parser(const ExtrusionRole & rol
         case erTopSolidInfill: return "TopSolidInfill";
         case erBottomSurface: return "BottomSurface";
         case erBridgeInfill:
-        case erInternalBridgeInfill: return "BridgeInfill";
+        case erInternalBridgeInfill:
+        case erExtraBridgeInfill:
+        case erExtraInternalBridgeInfill: return "BridgeInfill";
         case erGapFill: return "GapFill";
         case erIroning: return "Ironing";
         case erSkirt: return "Skirt";
