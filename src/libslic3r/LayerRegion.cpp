@@ -51,7 +51,7 @@ Flow LayerRegion::bridging_flow(FlowRole role, bool thick_bridge) const
 // Fill in layerm->fill_surfaces by trimming the layerm->slices by the cummulative layerm->fill_surfaces.
 void LayerRegion::slices_to_fill_surfaces_clipped()
 {
-    // Note: this method should be idempotent, but fill_surfaces gets modified 
+    // Note: this method should be idempotent, but fill_surfaces gets modified
     // in place. However we're now only using its boundaries (which are invariant)
     // so we're safe. This guarantees idempotence of prepare_infill() also in case
     // that combine_infill() turns some fill_surface into VOID surfaces.
@@ -63,8 +63,16 @@ void LayerRegion::slices_to_fill_surfaces_clipped()
     this->fill_surfaces.surfaces.clear();
     for (size_t surface_type = 0; surface_type < size_t(stCount); ++ surface_type) {
         const SurfacesPtr &this_surfaces = by_surface[surface_type];
-        if (! this_surfaces.empty())
-            this->fill_surfaces.append(intersection_ex(this_surfaces, this->fill_expolygons), SurfaceType(surface_type));
+        if (! this_surfaces.empty()) {
+            // For bridge surface types, preserve the bridge_angle from the template surface
+            SurfaceType st = SurfaceType(surface_type);
+            if (st == stBottomBridge || st == stInternalBridge || st == stInternalAfterExternalBridge || st == stSecondInternalBridge) {
+                // Use the first surface as a template to preserve bridge_angle
+                this->fill_surfaces.append(intersection_ex(this_surfaces, this->fill_expolygons), *this_surfaces.front());
+            } else {
+                this->fill_surfaces.append(intersection_ex(this_surfaces, this->fill_expolygons), st);
+            }
+        }
     }
 }
 
@@ -650,7 +658,7 @@ void LayerRegion::process_external_surfaces(const Layer *lower_layer, const Poly
                     bridges.emplace_back(surface);
             }
             if (surface.is_internal()) {
-            	assert(surface.surface_type == stInternal || surface.surface_type == stInternalSolid);
+            	assert(surface.surface_type == stInternal || surface.surface_type == stInternalSolid || surface.surface_type == stInternalAfterExternalBridge);
             	if (! has_infill && lower_layer != nullptr)
             		polygons_append(voids, surface.expolygon);
             	internal.emplace_back(std::move(surface));

@@ -105,11 +105,12 @@ public:
     // The following methods do not test for stPerimeter.
 	bool   is_top()      const { return this->surface_type == stTop; }
 	bool   is_bottom()   const { return this->surface_type == stBottom || this->surface_type == stBottomBridge; }
-	bool   is_bridge()   const { return this->surface_type == stBottomBridge || this->surface_type == stInternalBridge; }
-    bool   is_internal_bridge() const { return this->surface_type == stInternalBridge; }
+	bool   is_bridge()   const { return this->surface_type == stBottomBridge || this->surface_type == stInternalBridge || this->surface_type == stInternalAfterExternalBridge || this->surface_type == stSecondInternalBridge; }
+    bool   is_internal_bridge() const { return this->surface_type == stInternalBridge || this->surface_type == stSecondInternalBridge; }
+    bool   is_extra_bridge() const { return this->surface_type == stInternalAfterExternalBridge || this->surface_type == stSecondInternalBridge; }
 	bool   is_external() const { return this->is_top() || this->is_bottom(); }
 	bool   is_internal() const { return ! this->is_external(); }
-	bool   is_solid()    const { return this->is_external() || this->surface_type == stInternalSolid || this->surface_type == stInternalBridge; }
+	bool   is_solid()    const { return this->is_external() || this->surface_type == stInternalSolid || this->surface_type == stInternalBridge || this->surface_type == stInternalAfterExternalBridge || this->surface_type == stSecondInternalBridge; }
 	bool   is_solid_infill() const { return this->surface_type == stInternalSolid; }
 };
 

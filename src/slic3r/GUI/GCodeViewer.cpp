@@ -768,7 +768,9 @@ const std::vector<ColorRGBA> GCodeViewer::Extrusion_Role_Colors{ {
     { 0.40f, 0.36f, 0.78f, 1.0f },   // erBottomSurface
     { 1.00f, 0.55f, 0.41f, 1.0f },   // erIroning
     { 0.30f, 0.40f, 0.63f, 1.0f },   // erBridgeInfill
+    { 0.30f, 0.40f, 0.63f, 1.0f },   // erExtraBridgeInfill (same color as Bridge)
     { 0.30f, 0.50f, 0.73f, 1.0f },   // erInternalBridgeInfill
+    { 0.30f, 0.50f, 0.73f, 1.0f },   // erExtraInternalBridgeInfill (same color as Internal Bridge)
     { 1.00f, 1.00f, 1.00f, 1.0f },   // erGapFill
     { 0.00f, 0.53f, 0.43f, 1.0f },   // erSkirt
     { 0.00f, 0.23f, 0.43f, 1.0f },   // erBrim
