@@ -286,6 +286,9 @@ struct ProcessedPoint
     Point p;
     float speed = 1.0f;
     float overlap = 1.0f;
+    // Curled edge tracking for speed modifier display
+    bool has_curled_slowdown{ false };
+    float curled_height_factor{ 0.0f };  // The artificial_distance contribution from curled edges
 };
 
 class ExtrusionQualityEstimator
@@ -446,14 +449,21 @@ public:
             // Fixes bug where resulting overhang speed is higher than the current speed due to (for example) volumetric flow limits.
             extrusion_speed = std::min(extrusion_speed, original_speed);
             
+            bool has_curled_slowdown = false;
+            float curled_height_factor = 0.0f;
             if(slowdown_for_curled_edges) {
                 float curled_speed = calculate_speed(artificial_distance_to_curled_lines);
-            	extrusion_speed       = std::min(curled_speed, extrusion_speed); // adjust extrusion speed based on what is smallest - the calculated overhang speed or the artificial curled speed
+                // Track if curled edge slowdown ACTUALLY reduced the speed (not just considered)
+                if (curled_speed < extrusion_speed && artificial_distance_to_curled_lines > 0.001f) {
+                    has_curled_slowdown = true;
+                    curled_height_factor = artificial_distance_to_curled_lines;
+                }
+            	extrusion_speed = std::min(curled_speed, extrusion_speed); // adjust extrusion speed based on what is smallest - the calculated overhang speed or the artificial curled speed
             }
-            
+
             float overlap = std::min(1 - (curr.distance+artificial_distance_to_curled_lines) * width_inv, 1 - (next.distance+artificial_distance_to_curled_lines) * width_inv);
-			
-            processed_points.push_back({ scaled(curr.position), extrusion_speed, overlap });
+
+            processed_points.push_back({ scaled(curr.position), extrusion_speed, overlap, has_curled_slowdown, curled_height_factor });
         }
         return processed_points;
     }

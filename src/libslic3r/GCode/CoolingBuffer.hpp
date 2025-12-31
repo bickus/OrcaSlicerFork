@@ -2,7 +2,9 @@
 #define slic3r_CoolingBuffer_hpp_
 
 #include "../libslic3r.h"
+#include "SpeedModifier.hpp"
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <cfloat>
 
@@ -11,6 +13,8 @@ namespace Slic3r {
 class GCode;
 class Layer;
 struct PerExtruderAdjustments;
+
+// CoolingModification is now defined in SpeedModifier.hpp
 
 // A standalone G-code filter, to control cooling of the print.
 // The G-code is processed per layer. Once a layer is collected, fan start / stop commands are edited
@@ -26,15 +30,19 @@ public:
     CoolingBuffer(GCode &gcodegen);
     void        reset(const Vec3d &position);
     void        set_current_extruder(unsigned int extruder_id) { m_current_extruder = extruder_id; }
-    std::string process_layer(std::string &&gcode, size_t layer_id, bool flush);
+    // Process a layer, optionally populating cooling_data for speed modifier tracking
+    std::string process_layer(std::string &&gcode, size_t layer_id, bool flush,
+                              std::unordered_map<uint64_t, CoolingModification>& cooling_data);
 
 private:
 	CoolingBuffer& operator=(const CoolingBuffer&) = delete;
     std::vector<PerExtruderAdjustments> parse_layer_gcode(const std::string &gcode, std::vector<float> &current_pos) const;
     float       calculate_layer_slowdown(std::vector<PerExtruderAdjustments> &per_extruder_adjustments);
     // Apply slow down over G-code lines stored in per_extruder_adjustments, enable fan if needed.
-    // Returns the adjusted G-code.
-    std::string apply_layer_cooldown(const std::string &gcode, size_t layer_id, float layer_time, std::vector<PerExtruderAdjustments> &per_extruder_adjustments);
+    // Returns the adjusted G-code. Also populates cooling_data for speed modifier tracking.
+    std::string apply_layer_cooldown(const std::string &gcode, size_t layer_id, float layer_time,
+                                     std::vector<PerExtruderAdjustments> &per_extruder_adjustments,
+                                     std::unordered_map<uint64_t, CoolingModification>& cooling_data);
 
     // G-code snippet cached for the support layers preceding an object layer.
     std::string                 m_gcode;
@@ -57,6 +65,9 @@ private:
     unsigned int                m_current_extruder;
     //BBS: current fan speed
     int                         m_current_fan_speed;
+
+    // Speed modifier tracking - G1 extrusion counter for correlation with GCodeProcessor
+    mutable uint64_t m_g1_extrusion_counter{ 0 };  // Counter for G1 E+ commands (mutable for const parse)
 };
 
 }
