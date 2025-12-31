@@ -100,8 +100,8 @@ After each layer: Clear TEMPORARY transfer maps (g1_modifier_data, cooling_data)
 |-----------|------|-------|
 | GCodeProcessor member | GCode.hpp | 589 |
 | GCodeOutputStream::write() | GCode.cpp | 5177-5185 |
-| Variable-speed emission loop | GCode.cpp | 5993-6115 |
-| Non-variable-speed emission loop | GCode.cpp | 5827-5992 |
+| Variable-speed emission loop | GCode.cpp | 5932-6053 |
+| Non-variable-speed emission loop | GCode.cpp | 5766-5931 |
 | CoolingLine struct | CoolingBuffer.cpp | 46-105 |
 | CoolingBuffer feedrate parsing | CoolingBuffer.cpp | 398-407 |
 | **Pipeline cooling filter (MODIFY)** | GCode.cpp | 2856-2861 |
@@ -133,6 +133,8 @@ bool is_g1_extrusion(const std::string& line) {
 - G1 E+ commands are deterministic - same input produces same output
 - No parsing of comments, markers, or role tags
 - Counter increments identically across all components
+
+**Important:** This counter (`m_g1_extrusion_counter`) is NOT the same as the existing `m_g1_line_id` in GCodeProcessor. The existing counter tracks ALL G0/G1 commands, while this new counter specifically tracks only G1 commands with positive extrusion (E+). This design is intentional for memory efficiency and direct correlation with extrusion MoveVertex entries.
 
 ---
 
@@ -246,7 +248,7 @@ struct CoolingLine {
 };
 ```
 
-**Note:** Feedrate stored in mm/sec (converted from mm/min at line 404: `new_pos[4] /= 60.f`)
+**Note:** Feedrate stored in mm/sec (converted from mm/min at line 404: `new_pos[4] /= 60.f`). Both `feedrate` and `original_feedrate` should be stored in mm/sec (matching CoolingBuffer's internal representation). When recording `original_feedrate`, capture the already-converted mm/sec value.
 
 ### MoveVertex Extension (in GCodeProcessor.hpp)
 
@@ -336,10 +338,10 @@ public:
 
 **Location:** `GCode::_extrude()` - Two emission loops exist:
 
-1. **Non-variable-speed loop** (lines 5827-5992): Standard path emission
-2. **Variable-speed loop** (lines 5993-6115): Per-point speed variation for overhang
+1. **Non-variable-speed loop** (lines 5766-5931): Standard path emission
+2. **Variable-speed loop** (lines 5932-6053): Per-point speed variation for overhang
 
-**Variable-speed loop structure (lines 6016-6114):**
+**Variable-speed loop structure (lines 5954-6053):**
 
 ```cpp
 for (size_t i = 1; i < new_points.size(); i++) {
@@ -364,7 +366,7 @@ for (size_t i = 1; i < new_points.size(); i++) {
 **Non-variable-speed loop - similar pattern:**
 
 ```cpp
-// Lines 5827-5992
+// Lines 5766-5931
 for (const Line& line : path.polyline.lines()) {
     // ... generate G1 ...
     gcode += m_writer.extrude_to_xy(...);
@@ -492,7 +494,7 @@ if (m_small_perimeter_state.applied && is_perimeter(path.role())) {
 
 ### Step 5: First Layer Modifier Tracking
 
-**Location:** `GCode.cpp` `_extrude()` (~line 5512)
+**Location:** `GCode.cpp` `_extrude()` (~line 5444)
 
 ```cpp
 if (this->on_first_layer()) {
@@ -513,7 +515,7 @@ if (this->on_first_layer()) {
 
 ### Step 5a: Slow Down Layers Modifier Tracking
 
-**Location:** `GCode.cpp` `_extrude()` (lines 5472-5488)
+**Location:** `GCode.cpp` `_extrude()` (lines 5441-5454)
 
 ```cpp
 // slow_down_layers: gradual speed increase over first N layers
@@ -550,7 +552,7 @@ else if (m_config.slow_down_layers > 1) {
 
 ### Step 5b: Volumetric Cap Modifier Tracking
 
-**Location:** `GCode.cpp` `_extrude()` (lines 5507-5513)
+**Location:** `GCode.cpp` `_extrude()` (lines 5516-5522)
 
 ```cpp
 // filament_max_volumetric_speed: limit speed based on volumetric flow
@@ -578,7 +580,7 @@ if (EXTRUDER_CONFIG(filament_max_volumetric_speed) > 0) {
 
 ### Step 5c: Resonance Avoidance Modifier Tracking
 
-**Location:** `GCode.cpp` `_extrude()` (lines 5515-5547)
+**Location:** `GCode.cpp` `_extrude()` (lines 5476-5504)
 
 **Member variable:** `m_resonance_avoidance` (GCode.hpp line 511)
 - Declared as: `bool m_resonance_avoidance;`
@@ -692,7 +694,7 @@ if (scarf_applied) {
 
 ### Step 6: Overhang with Percentage (Per-G1)
 
-**Location:** `GCode.cpp` after `estimate_extrusion_quality()` (~line 5590)
+**Location:** `GCode.cpp` after `estimate_extrusion_quality()` (~lines 5544-5567)
 
 **Key change:** Store per-G1, not per-path. Each G1 in a variable-speed path can have different overhang/curled values.
 
@@ -893,6 +895,13 @@ if (is_g1_extrusion(line)) {
     }
 }
 ```
+
+**Integration Point Details:**
+- GCodeProcessor already has `m_g1_line_id` (line 865) which counts ALL G0/G1 commands
+- The proposed `m_g1_extrusion_counter` is a SEPARATE counter for G1 E+ only
+- Best location for data lookup is in `store_move_vertex()` (line 6130) after MoveVertex creation (lines 6147-6169)
+- The counter `m_g1_line_id` is incremented at line 3651 (START of process_G1)
+- `store_move_vertex()` is called at line 4189 (END of process_G1)
 
 ---
 
@@ -1158,3 +1167,87 @@ These are role-based speeds that get special labels in UI instead of generic "Ba
 - [x] SlowDownLayers, VolumetricCap, ResonanceAvoidance, ScarfJoint included
 - [x] Layer Cooling tracked directly (not by comparison)
 - [x] Variable modifier clearing logic specified (reset_variable_modifiers)
+
+---
+
+## Developer Documentation Guidelines
+
+**IMPORTANT: Instructions for developers implementing this feature**
+
+### Documentation Requirements
+
+Each developer working on this feature MUST create documentation files in `doc/speed_hints/` folder. **Do NOT modify the main design document** (`speed_modifier_tracking_design.md`).
+
+### File Naming Convention
+
+Create files named: `implementation_notes_[your_name]_[date].md` or `implementation_[component]_[date].md`
+
+Example: `implementation_notes_john_2025-01-15.md` or `implementation_gcode_tracking_2025-01-15.md`
+
+### Required Content
+
+Your documentation MUST include:
+
+1. **What was implemented** - Brief description of the component/step completed
+2. **Where changes were made** - File paths and approximate line numbers (no full code blocks)
+3. **Issues encountered** - Problems faced and how they were resolved
+4. **Decisions made** - Any implementation choices and their reasoning
+5. **Assumptions** - Any assumptions made during implementation
+6. **Deviations** - Any deviations from the design document (see rules below)
+
+### Documentation Format
+
+```markdown
+## [Date] - [Component/Step Name]
+
+### Implemented
+- Brief description of what was done
+
+### Files Modified
+- `path/to/file.cpp` - Added X at lines Y-Z
+- `path/to/file.hpp` - Added struct definition
+
+### Issues Encountered
+- Issue description and resolution
+
+### Decisions Made
+- Decision and reasoning
+
+### Assumptions
+- Any assumptions made
+
+### Deviations (if any)
+- Deviation description with STRONG justification
+```
+
+### CRITICAL: Deviation Policy
+
+**Developers are NOT allowed to deviate from the design document unless there is a critical technical reason.**
+
+Unacceptable reasons for deviation:
+- "Simplifies the code"
+- "Introduces less complexity"
+- "Easier to implement"
+- "I think this is better"
+- "Not sure why it was designed this way"
+
+Acceptable reasons for deviation:
+- The documented approach causes crashes/undefined behavior
+- A required API/function does not exist as documented
+- The approach violates thread safety in ways not anticipated
+- Performance impact is catastrophic (measured, not assumed)
+
+**If you must deviate:**
+1. Document the exact deviation
+2. Provide the critical technical reason
+3. Explain why the original approach cannot work
+4. Get approval before proceeding if possible
+
+### No Code Blocks
+
+Do NOT include full code blocks in your documentation. Instead, describe:
+- What was added/modified
+- The file and approximate location
+- Key function/variable names involved
+
+This keeps documentation concise and prevents it from becoming stale as the codebase evolves.
