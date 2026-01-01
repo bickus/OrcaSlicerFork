@@ -206,6 +206,11 @@ enum EnableExtraBridgeLayer {
     eblDisabled, eblExternalBridgeOnly, eblInternalBridgeOnly, eblApplyToAll
 };
 
+//Orca: steep slope solid infill
+enum SteepSlopeInfillMode {
+    ssimDisabled, ssimEnabled
+};
+
 //Orca
 enum GapFillTarget {
      gftEverywhere, gftTopBottom, gftNowhere
@@ -974,6 +979,9 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,                bridge_speed))
     ((ConfigOptionFloatOrPercent,       internal_bridge_speed))
     ((ConfigOptionEnum<EnsureVerticalShellThickness>,   ensure_vertical_shell_thickness))
+    // Orca: steep slope solid infill
+    ((ConfigOptionEnum<SteepSlopeInfillMode>, solid_infill_under_steep_slopes))
+    ((ConfigOptionFloat,               steep_slope_angle_threshold))
     ((ConfigOptionPercent,              top_surface_density))
     ((ConfigOptionPercent,               bottom_surface_density))
     ((ConfigOptionEnum<InfillPattern>,  top_surface_pattern))

@@ -1082,6 +1082,8 @@ bool PrintObject::invalidate_state_by_config_options(
             || opt_key == "align_infill_direction_to_model" 
             || opt_key == "extra_solid_infills"
             || opt_key == "ensure_vertical_shell_thickness"
+            || opt_key == "solid_infill_under_steep_slopes"
+            || opt_key == "steep_slope_angle_threshold"
             || opt_key == "bridge_angle"
             || opt_key == "internal_bridge_angle" // ORCA: Internal bridge angle override
             //BBS
@@ -1653,6 +1655,7 @@ void PrintObject::discover_vertical_shells()
                         // Top surfaces.
                         append(cache.top_surfaces, offset(layerm.slices.filter_by_type(stTop), top_bottom_expansion));
 //                        append(cache.top_surfaces, offset(layerm.fill_surfaces.filter_by_type(stTop), top_bottom_expansion));
+
                         // Bottom surfaces.
                         append(cache.bottom_surfaces, offset(layerm.slices.filter_by_types(surfaces_bottom), top_bottom_expansion));
 //                        append(cache.bottom_surfaces, offset(layerm.fill_surfaces.filter_by_types(surfaces_bottom), top_bottom_expansion));
@@ -1722,6 +1725,7 @@ void PrintObject::discover_vertical_shells()
                         auto &cache = cache_top_botom_regions[idx_layer];
                         cache.top_surfaces = offset(layerm.slices.filter_by_type(stTop), top_bottom_expansion);
 //                        append(cache.top_surfaces, offset(layerm.fill_surfaces.filter_by_type(stTop), top_bottom_expansion));
+
                         // Bottom surfaces.
                         cache.bottom_surfaces = offset(layerm.slices.filter_by_types(surfaces_bottom), top_bottom_expansion);
 //                        append(cache.bottom_surfaces, offset(layerm.fill_surfaces.filter_by_types(surfaces_bottom), top_bottom_expansion));
@@ -2132,7 +2136,7 @@ void PrintObject::bridge_over_infill()
                     SurfacesPtr region_internal_solids = region->fill_surfaces.filter_by_type(stInternalSolid);
                     for (const Surface *s : region_internal_solids) {
                         Polygons unsupported         = intersection(to_polygons(s->expolygon), unsupported_area);
-                        
+
                         // Orca: If the user has selected to always support internal overhanging regions, no matter how small
                         // skip the filtering
                         if (po->config().dont_filter_internal_bridges.value == ibfNofilter){
@@ -2154,7 +2158,7 @@ void PrintObject::bridge_over_infill()
                                 }
                                 worth_bridging = intersection(closing(worth_bridging, float(SCALED_EPSILON)), s->expolygon);
                                 candidate_surfaces.push_back(CandidateSurface(s, lidx, worth_bridging, region, 0));
-                                
+
 #ifdef DEBUG_BRIDGE_OVER_INFILL
                                 debug_draw(std::to_string(lidx) + "_candidate_surface_" + std::to_string(area(s->expolygon)),
                                            to_lines(region->layer()->lslices), to_lines(s->expolygon), to_lines(worth_bridging),
@@ -2166,6 +2170,83 @@ void PrintObject::bridge_over_infill()
                                            to_lines(diff(to_polygons(s->expolygon), expand(worth_bridging, spacing))),
                                            to_lines(unsupported_area));
 #endif
+                            }
+                        }
+                    }
+
+                    // Orca: Detect steep inward slopes and create bridges to support upper layer's walls.
+                    // This bypasses the "Filter out small internal bridges" setting.
+                    //
+                    // Efficiency optimization: Instead of bridging every layer on a long slope,
+                    // we bridge every ~5 layers. The intermediate layers get solid infill via
+                    // shell propagation in discover_horizontal_shells(). A bridge + 4 layers
+                    // of solid infill is faster and uses less material than 5 bridges.
+                    const int steep_slope_bridge_interval = 5;
+                    const PrintRegionConfig &region_config = region->region().config();
+                    if (region_config.solid_infill_under_steep_slopes.value == ssimEnabled &&
+                        lidx + 1 < po->layer_count() &&
+                        lidx % steep_slope_bridge_interval == 0) {  // Only bridge every N layers
+                        const Layer *upper_layer = po->get_layer(lidx + 1);
+                        const double slope_threshold_deg = region_config.steep_slope_angle_threshold.value;
+                        if (slope_threshold_deg > 0 && slope_threshold_deg < 90 && layer->height > 0) {
+                            const double slope_threshold_rad = slope_threshold_deg * M_PI / 180.0;
+                            const double threshold_offset = layer->height * std::tan(slope_threshold_rad);
+
+                            Polygons upper_slices = to_polygons(upper_layer->lslices);
+                            Polygons current_slices = to_polygons(layer->lslices);
+
+                            if (!upper_slices.empty() && !current_slices.empty()) {
+                                // Steep slope = current layer extends beyond expanded upper layer
+                                Polygons upper_expanded = offset(upper_slices, scale_(threshold_offset));
+                                Polygons steep_slope_check = diff(current_slices, upper_expanded, ApplySafetyOffset::Yes);
+
+                                if (!steep_slope_check.empty()) {
+                                    // Steep slope detected. We only need to bridge where the UPPER layer's
+                                    // perimeters will be printed - not the entire steep slope region.
+                                    Flow ext_peri_flow = region->flow(frExternalPerimeter);
+                                    Flow peri_flow = region->flow(frPerimeter);
+                                    int wall_count = std::max(1, region_config.wall_loops.value);
+                                    double perimeter_band = ext_peri_flow.width() +
+                                        (wall_count > 1 ? (wall_count - 1) * peri_flow.spacing() : 0);
+
+                                    // Upper layer's perimeter zone = ring from boundary inward by perimeter_band
+                                    Polygons upper_peri_inner = offset(upper_slices, -scale_(perimeter_band));
+                                    Polygons upper_peri_zone = diff(upper_slices, upper_peri_inner);
+
+                                    // Get sparse infill on THIS layer
+                                    Polygons this_layer_sparse;
+                                    for (const Surface &surface : region->fill_surfaces) {
+                                        if (surface.surface_type == stInternal &&
+                                            region_config.sparse_infill_density.value < 100) {
+                                            polygons_append(this_layer_sparse, to_polygons(surface.expolygon));
+                                        }
+                                    }
+
+                                    if (!this_layer_sparse.empty()) {
+                                        // Find where upper layer's perimeter zone is over this layer's sparse infill
+                                        Polygons sparse_to_bridge = intersection(this_layer_sparse, upper_peri_zone);
+
+                                        if (!sparse_to_bridge.empty()) {
+                                            // Minimal expansion - just enough to connect to perimeters
+                                            // Cap at 1mm absolute maximum
+                                            double max_expansion = std::min(double(spacing), scale_(1.0));
+                                            Polygons worth_bridging = expand(sparse_to_bridge, max_expansion);
+                                            // Tightly constrain to perimeter zone
+                                            Polygons constraint = expand(upper_peri_zone, max_expansion);
+                                            constraint = intersection(constraint, current_slices);
+                                            worth_bridging = intersection(worth_bridging, constraint);
+
+                                            // Create bridge candidates from stInternal surfaces
+                                            SurfacesPtr region_internals = region->fill_surfaces.filter_by_type(stInternal);
+                                            for (const Surface *s : region_internals) {
+                                                Polygons bridge_in_surface = intersection(worth_bridging, to_polygons(s->expolygon));
+                                                if (!bridge_in_surface.empty()) {
+                                                    candidate_surfaces.push_back(CandidateSurface(s, lidx, bridge_in_surface, region, 0));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -2890,6 +2971,18 @@ void PrintObject::bridge_over_infill()
                                 break;
                             }
                         }
+                        // Orca: Also check stInternal surfaces for steep slope bridging
+                        for (const Surface *surface : internal_infills) {
+                            if (cs.original_surface == surface) {
+                                Surface tmp{*surface, {}};
+                                tmp.surface_type = stInternalBridge;
+                                tmp.bridge_angle = cs.bridge_angle;
+                                for (const ExPolygon &ep : union_ex(cs.new_polys)) {
+                                    new_surfaces.emplace_back(tmp, ep);
+                                }
+                                break;
+                            }
+                        }
                     }
                 }
                 ExPolygons new_internal_solids = to_expolygons(internal_solids);
@@ -3037,6 +3130,106 @@ void PrintObject::bridge_over_infill()
     // ===========================================================================================
     // === ORCA: End of second internal bridging pass ============================================
     // ===========================================================================================
+
+    // ======================================================================================================================================
+    // === ORCA: Propagate solid infill above steep slope bridges =========================================================================
+    // === Bridges are created every 5 layers. The 4 layers above each bridge get solid infill to provide continuous support. ============
+    // ======================================================================================================================================
+    {
+        const int steep_slope_bridge_interval = 5;
+        const int solid_layers_after_bridge = steep_slope_bridge_interval - 1; // 4 layers of solid after each bridge
+
+        // Process bridge layers (every 5th layer)
+        for (size_t lidx = 0; lidx < this->layers().size(); ++lidx) {
+            if (lidx % steep_slope_bridge_interval != 0)
+                continue;
+
+            Layer *bridge_layer = this->get_layer(lidx);
+
+            // Gather steep slope bridge areas from this layer
+            ExPolygons bridge_areas;
+            for (const LayerRegion *region : bridge_layer->regions()) {
+                const PrintRegionConfig &region_config = region->region().config();
+                if (region_config.solid_infill_under_steep_slopes.value != ssimEnabled)
+                    continue;
+
+                // Check if this layer has steep slope (re-detect)
+                if (lidx + 1 >= this->layers().size())
+                    continue;
+
+                const Layer *upper_layer = this->get_layer(lidx + 1);
+                const double slope_threshold_deg = region_config.steep_slope_angle_threshold.value;
+                if (slope_threshold_deg <= 0 || slope_threshold_deg >= 90 || bridge_layer->height <= 0)
+                    continue;
+
+                const double slope_threshold_rad = slope_threshold_deg * M_PI / 180.0;
+                const double threshold_offset = bridge_layer->height * std::tan(slope_threshold_rad);
+
+                Polygons upper_slices = to_polygons(upper_layer->lslices);
+                Polygons current_slices = to_polygons(bridge_layer->lslices);
+                Polygons upper_expanded = offset(upper_slices, scale_(threshold_offset));
+                Polygons steep_slope_check = diff(current_slices, upper_expanded, ApplySafetyOffset::Yes);
+
+                if (steep_slope_check.empty())
+                    continue;
+
+                // Collect bridge surfaces from this region
+                for (const Surface &surf : region->fill_surfaces.surfaces) {
+                    if (surf.surface_type == stInternalBridge) {
+                        bridge_areas.push_back(surf.expolygon);
+                    }
+                }
+            }
+
+            if (bridge_areas.empty())
+                continue;
+
+            bridge_areas = union_safety_offset_ex(bridge_areas);
+
+            // Propagate solid infill to the next N layers
+            for (int offset_layer = 1; offset_layer <= solid_layers_after_bridge; ++offset_layer) {
+                size_t target_lidx = lidx + offset_layer;
+                if (target_lidx >= this->layers().size())
+                    break;
+
+                Layer *target_layer = this->get_layer(target_lidx);
+
+                for (LayerRegion *target_region : target_layer->regions()) {
+                    Surfaces new_surfaces;
+
+                    for (Surface &surf : target_region->fill_surfaces.surfaces) {
+                        if (surf.surface_type == stInternal) {
+                            // Check overlap with bridge areas
+                            ExPolygons overlap = intersection_ex(surf.expolygon, bridge_areas, ApplySafetyOffset::Yes);
+
+                            if (!overlap.empty()) {
+                                // Convert overlapping portion to solid infill
+                                for (const ExPolygon &ep : overlap) {
+                                    Surface solid_surf{surf, ep};
+                                    solid_surf.surface_type = stInternalSolid;
+                                    new_surfaces.push_back(solid_surf);
+                                }
+
+                                // Keep the non-overlapping portion as sparse
+                                ExPolygons leftover = diff_ex(surf.expolygon, bridge_areas, ApplySafetyOffset::Yes);
+                                for (const ExPolygon &ep : leftover) {
+                                    new_surfaces.emplace_back(surf, ep);
+                                }
+                            } else {
+                                // No overlap, keep as-is
+                                new_surfaces.push_back(surf);
+                            }
+                        } else {
+                            // Not stInternal, keep as-is
+                            new_surfaces.push_back(surf);
+                        }
+                    }
+
+                    target_region->fill_surfaces.surfaces = std::move(new_surfaces);
+                }
+            }
+        }
+    }
 
     // ======================================================================================================================================
     // === ORCA: Create a second external bridge layer above the first bridge layer. ====================================================
@@ -3539,6 +3732,7 @@ void PrintObject::discover_horizontal_shells()
                 for (const Surface &surface : layerm->fill_surfaces.surfaces)
                     if (surface.surface_type == type)
                         polygons_append(solid, to_polygons(surface.expolygon));
+
                 if (solid.empty())
                     continue;
 //                Slic3r::debugf "Layer %d has %s surfaces\n", $i, ($type == stTop) ? 'top' : 'bottom';

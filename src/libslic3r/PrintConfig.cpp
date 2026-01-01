@@ -311,6 +311,13 @@ static t_config_enum_values s_keys_map_EnableExtraBridgeLayer {
 };
 CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(EnableExtraBridgeLayer)
 
+// Orca: steep slope solid infill
+static t_config_enum_values s_keys_map_SteepSlopeInfillMode {
+    { "disabled",        ssimDisabled },
+    { "enabled",         ssimEnabled },
+};
+CONFIG_OPTION_ENUM_DEFINE_STATIC_MAPS(SteepSlopeInfillMode)
+
 // Orca
 static t_config_enum_values s_keys_map_GapFillTarget {
     { "everywhere",        gftEverywhere },
@@ -1579,6 +1586,40 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionEnum<InternalBridgeFilter>(ibfDisabled));
 
+    // Orca: steep slope solid infill
+    def = this->add("solid_infill_under_steep_slopes", coEnum);
+    def->label = L("Solid infill under steep slopes");
+    def->category = L("Strength");
+    def->tooltip = L("On steep inward-sloping surfaces (like narrowing cones, funnels, or tapered tubes), "
+                     "inner walls may end up printed over sparse infill. This can cause poor adhesion "
+                     "and visible defects.\n\n"
+                     "When enabled, this option detects regions where inner walls would be printed on "
+                     "steep inward slopes and generates solid infill beneath them to provide a proper foundation.\n\n"
+                     "The detection uses the slope angle threshold to identify where the upper layer boundary "
+                     "has shrunk significantly inward relative to the current layer.");
+    def->enum_keys_map = &ConfigOptionEnum<SteepSlopeInfillMode>::get_enum_values();
+    def->enum_values.push_back("disabled");
+    def->enum_values.push_back("enabled");
+    def->enum_labels.push_back(L("Disabled"));
+    def->enum_labels.push_back(L("Enabled"));
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionEnum<SteepSlopeInfillMode>(ssimDisabled));
+
+    def = this->add("steep_slope_angle_threshold", coFloat);
+    def->label = L("Steep slope angle threshold");
+    def->category = L("Strength");
+    def->tooltip = L("Minimum angle from vertical at which a surface is considered steeply inward-sloping. "
+                     "Slopes steeper than this angle will get solid infill beneath inner walls.\n\n"
+                     "Set this value LOWER than your model's actual slope angle to trigger detection. "
+                     "For example, if your model has 60° slopes from vertical, try setting this to 50-55°.\n\n"
+                     "Lower values = more aggressive detection (catches gentler slopes).\n"
+                     "Higher values = less aggressive detection (only catches very steep slopes).\n\n"
+                     "Typical starting value: 50 degrees.");
+    def->sidetext = "°";	// degrees, don't need translation
+    def->min = 0;
+    def->max = 90;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(50.0));
 
     def = this->add("max_bridge_length", coFloat);
     def->label = L("Max bridge length");
@@ -3259,7 +3300,7 @@ void PrintConfigDef::init_fff_params()
                       "Advanced syntax is supported: '+5' rotates +5° every layer; '+5#5' rotates +5° every 5 layers. See the Wiki for details. "
                       "When a template is set, the standard infill direction setting is ignored. "
                       "Note: some infill patterns (e.g., Gyroid) control rotation themselves; use with care.");
-    def->sidetext = L("°");
+    def->sidetext = "°";	// degrees, don't need translation
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionString(""));
 
