@@ -831,7 +831,7 @@ void GCodeViewer::SequentialView::render(const bool has_render_path, float legen
     if (wxGetApp().is_editor())
         bottom -= wxGetApp().plater()->get_view_toolbar().get_height();
 #endif
-    if (has_render_path)
+    if (has_render_path && current.last < gcode_ids.size())
         gcode_window.render(legend_height + 2, std::max(10.f, (float)canvas_height - 40), (float)canvas_width - (float)right_margin, static_cast<uint64_t>(gcode_ids[current.last]));
 }
 
@@ -2194,7 +2194,9 @@ void GCodeViewer::update_moves_slider(bool set_to_max)
         unsigned int        count = 0;
         for (unsigned int i = view.endpoints.first; i <= view.endpoints.last; ++i) {
             values[count] = static_cast<double>(i + 1);
-            if (view.gcode_ids[i] > 0) alternate_values[count] = static_cast<double>(view.gcode_ids[i]);
+            // Bounds check for gcode_ids - endpoints may occasionally exceed vector size
+            if (i < view.gcode_ids.size() && view.gcode_ids[i] > 0)
+                alternate_values[count] = static_cast<double>(view.gcode_ids[i]);
             ++count;
         }
 

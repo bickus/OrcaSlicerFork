@@ -402,6 +402,44 @@ Base: 600
 
 ---
 
+## Bug Fix 7: GCodeViewer Crash on Preview Open
+
+### Problem
+Application crashed with "Access violation" when opening preview after slicing. The crash occurred at `GCodeViewer::update_moves_slider` line 2197 when accessing `view.gcode_ids[i]`.
+
+### Root Cause
+The `gcode_ids` vector is populated by iterating through moves and filtering out Seam types (size = moves - seams). However, `endpoints.last` (a segment ID) could occasionally exceed `gcode_ids.size()`, causing out-of-bounds access.
+
+### Solution
+**File:** `src/slic3r/GUI/GCodeViewer.cpp`
+
+Added bounds checks at two locations:
+
+1. **Line 834** (SequentialView::render):
+   ```cpp
+   // Before:
+   if (has_render_path)
+       gcode_window.render(..., gcode_ids[current.last]);
+
+   // After:
+   if (has_render_path && current.last < gcode_ids.size())
+       gcode_window.render(..., gcode_ids[current.last]);
+   ```
+
+2. **Line 2197-2199** (update_moves_slider):
+   ```cpp
+   // Before:
+   if (view.gcode_ids[i] > 0) alternate_values[count] = ...;
+
+   // After:
+   if (i < view.gcode_ids.size() && view.gcode_ids[i] > 0)
+       alternate_values[count] = ...;
+   ```
+
+Note: Line 2306 already had proper bounds checking for this vector.
+
+---
+
 ## Summary
 
 All 8 implementation phases completed, plus:
@@ -415,5 +453,6 @@ All 8 implementation phases completed, plus:
    - Bug 5: Counter drift across layers (fixed with per-layer reset)
 4. Bug fix 6: CurledEdge modifier only shown when it actually limits speed
 5. UI improvements: centered speed display, proper color formatting, cleaner layout
+6. Bug fix 7: GCodeViewer crash due to out-of-bounds gcode_ids access
 
 Feature is ready for testing after successful compilation.
