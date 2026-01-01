@@ -2214,7 +2214,7 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
 
     m_cooling_buffer = make_unique<CoolingBuffer>(*this);
     m_cooling_buffer->set_current_extruder(initial_extruder_id);
-    
+
     // Orca: Initialise AdaptivePA processor filter
     m_pa_processor = std::make_unique<AdaptivePAProcessor>(*this, tool_ordering.all_extruders());
 
@@ -2844,33 +2844,37 @@ void GCode::process_layers(
         [&spiral_mode = *this->m_spiral_vase.get(), &layers_to_print](LayerResult in) -> LayerResult {
         	if (in.nop_layer_result)
                 return in;
-                
+
             spiral_mode.enable(in.spiral_vase_enable);
             bool last_layer = in.layer_id == layers_to_print.size() - 1;
-            return { spiral_mode.process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush};
+            in.gcode = spiral_mode.process_layer(std::move(in.gcode), last_layer);
+            return in;
         });
     const auto pressure_equalizer = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
         [pressure_equalizer = this->m_pressure_equalizer.get()](LayerResult in) -> LayerResult {
             return pressure_equalizer->process_layer(std::move(in));
         });
-    const auto cooling = tbb::make_filter<LayerResult, std::string>(slic3r_tbb_filtermode::serial_in_order,
-        [&cooling_buffer = *this->m_cooling_buffer.get()](LayerResult in) -> std::string {
+    const auto cooling = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
+        [&cooling_buffer = *this->m_cooling_buffer.get()](LayerResult in) -> LayerResult {
         	if (in.nop_layer_result)
-                return in.gcode;
-            return cooling_buffer.process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush);
+                return in;
+            // Process the gcode through cooling buffer, which may also populate cooling_data
+            in.gcode = cooling_buffer.process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush, in.cooling_data);
+            return in;
         });
-    const auto pa_processor_filter = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
-            [&pa_processor = *this->m_pa_processor](std::string in) -> std::string {
-                return pa_processor.process_layer(std::move(in));
+    const auto pa_processor_filter = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
+            [&pa_processor = *this->m_pa_processor](LayerResult in) -> LayerResult {
+                in.gcode = pa_processor.process_layer(std::move(in.gcode));
+                return in;
             }
         );
-    
-    const auto output = tbb::make_filter<std::string, void>(slic3r_tbb_filtermode::serial_in_order,
-        [&output_stream](std::string s) { output_stream.write(s); }
+
+    const auto output = tbb::make_filter<LayerResult, void>(slic3r_tbb_filtermode::serial_in_order,
+        [&output_stream](LayerResult layer) { output_stream.write_layer(std::move(layer)); }
     );
 
-    const auto fan_mover = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
-            [&fan_mover = this->m_fan_mover, &config = this->config(), &writer = this->m_writer](std::string in)->std::string {
+    const auto fan_mover = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
+            [&fan_mover = this->m_fan_mover, &config = this->config(), &writer = this->m_writer](LayerResult in) -> LayerResult {
 
         CNumericLocalesSetter locales_setter;
 
@@ -2884,7 +2888,7 @@ void GCode::process_layers(
                     config.fan_speedup_overhangs.value,
                     (float)config.fan_kickstart.value));
             //flush as it's a whole layer
-            return fan_mover->process_gcode(in, true);
+            in.gcode = fan_mover->process_gcode(in.gcode, true);
         }
         return in;
     });
@@ -2946,30 +2950,33 @@ void GCode::process_layers(
                 return in;
             spiral_mode.enable(in.spiral_vase_enable);
             bool last_layer = in.layer_id == layers_to_print.size() - 1;
-            return { spiral_mode.process_layer(std::move(in.gcode), last_layer), in.layer_id, in.spiral_vase_enable, in.cooling_buffer_flush };
+            in.gcode = spiral_mode.process_layer(std::move(in.gcode), last_layer);
+            return in;
         });
     const auto pressure_equalizer = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
         [pressure_equalizer = this->m_pressure_equalizer.get()](LayerResult in) -> LayerResult {
              return pressure_equalizer->process_layer(std::move(in));
         });
-    const auto cooling = tbb::make_filter<LayerResult, std::string>(slic3r_tbb_filtermode::serial_in_order,
-        [&cooling_buffer = *this->m_cooling_buffer.get()](LayerResult in)->std::string {
+    const auto cooling = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
+        [&cooling_buffer = *this->m_cooling_buffer.get()](LayerResult in) -> LayerResult {
             if (in.nop_layer_result)
-                return in.gcode;
-            return cooling_buffer.process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush);
+                return in;
+            in.gcode = cooling_buffer.process_layer(std::move(in.gcode), in.layer_id, in.cooling_buffer_flush, in.cooling_data);
+            return in;
         });
-    const auto pa_processor_filter = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
-        [&pa_processor = *this->m_pa_processor](std::string in) -> std::string {
-            return pa_processor.process_layer(std::move(in));
+    const auto pa_processor_filter = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
+        [&pa_processor = *this->m_pa_processor](LayerResult in) -> LayerResult {
+            in.gcode = pa_processor.process_layer(std::move(in.gcode));
+            return in;
         }
     );
-    
-    const auto output = tbb::make_filter<std::string, void>(slic3r_tbb_filtermode::serial_in_order,
-        [&output_stream](std::string s) { output_stream.write(s); }
+
+    const auto output = tbb::make_filter<LayerResult, void>(slic3r_tbb_filtermode::serial_in_order,
+        [&output_stream](LayerResult layer) { output_stream.write_layer(std::move(layer)); }
     );
 
-    const auto fan_mover = tbb::make_filter<std::string, std::string>(slic3r_tbb_filtermode::serial_in_order,
-        [&fan_mover = this->m_fan_mover, &config = this->config(), &writer = this->m_writer](std::string in)->std::string {
+    const auto fan_mover = tbb::make_filter<LayerResult, LayerResult>(slic3r_tbb_filtermode::serial_in_order,
+        [&fan_mover = this->m_fan_mover, &config = this->config(), &writer = this->m_writer](LayerResult in) -> LayerResult {
 
         if (config.fan_speedup_time.value != 0 || config.fan_kickstart.value > 0) {
             if (fan_mover.get() == nullptr)
@@ -2981,7 +2988,7 @@ void GCode::process_layers(
                     config.fan_speedup_overhangs.value,
                     (float)config.fan_kickstart.value));
             //flush as it's a whole layer
-            return fan_mover->process_gcode(in, true);
+            in.gcode = fan_mover->process_gcode(in.gcode, true);
         }
         return in;
     });
@@ -3681,6 +3688,10 @@ LayerResult GCode::process_layer(
     if (layer_tools.extruders.empty())
         // Nothing to extrude.
         return result;
+
+    // Speed modifier tracking: reset counter at start of each layer
+    m_g1_extrusion_counter = 0;
+    m_g1_modifier_data.clear();
 
     // Extract 1st object_layer and support_layer of this set of layers with an equal print_z.
     coordf_t             print_z       = layer.print_z;
@@ -4535,6 +4546,12 @@ LayerResult GCode::process_layer(
 
     result.gcode = std::move(gcode);
     result.cooling_buffer_flush = object_layer || raft_layer || last_layer;
+
+    // Speed modifier tracking: move this layer's modifier data into the result
+    // This data will travel through the pipeline and be passed to GCodeProcessor
+    result.modifier_data = std::move(m_g1_modifier_data);
+    m_g1_modifier_data.clear();  // Ensure clean state for next layer
+
     return result;
 }
 
@@ -4848,7 +4865,9 @@ std::string GCode::extrude_loop(ExtrusionLoop loop, std::string description, dou
         return is_small_peri ? small_peri_speed : speed;
     };
 
-    
+    // Speed modifier tracking: set small perimeter state for tracking in _extrude()
+    m_small_perimeter_state = {small_peri_speed > 0, 0.0, static_cast<float>(small_peri_speed)};
+
     //Orca: Adaptive PA: calculate average mm3_per_mm value over the length of the loop.
     //This is used for adaptive PA
     m_multi_flow_segment_path_pa_set = false; // always emit PA on the first path of the loop
@@ -5191,6 +5210,16 @@ void GCode::GCodeOutputStream::writeln(const std::string &what)
         this->write(what.back() == '\n' ? what : what + '\n');
 }
 
+void GCode::GCodeOutputStream::write_layer(LayerResult&& layer)
+{
+    // Set the layer's modifier data on the processor before writing gcode
+    // This ensures the processor has the correct data for this layer's G1 commands
+    m_processor.set_layer_data(std::move(layer.modifier_data), std::move(layer.cooling_data));
+
+    // Now write the gcode - the processor will use the layer data during process_buffer
+    this->write(layer.gcode);
+}
+
 void GCode::GCodeOutputStream::write_format(const char* format, ...)
 {
     va_list args;
@@ -5390,44 +5419,119 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
 
 
 
+    // Speed modifier tracking - reset for new extrusion path
+    m_current_g1_modifiers.reset();
+    bool scarf_applied = false;
+    double scarf_base_speed = 0;
+
     // set speed
     if (speed == -1) {
         if (path.role() == erPerimeter) {
             speed = m_config.get_abs_value("inner_wall_speed");
+            m_current_g1_modifiers.base_type = BaseSpeedType::Normal;
             if (sloped) {
+                scarf_base_speed = speed;
                 speed = std::min(speed, m_config.scarf_joint_speed.get_abs_value(m_config.get_abs_value("inner_wall_speed")));
+                if (speed < scarf_base_speed - 0.5) scarf_applied = true;
             }
         } else if (path.role() == erExternalPerimeter) {
             speed = m_config.get_abs_value("outer_wall_speed");
+            m_current_g1_modifiers.base_type = BaseSpeedType::Normal;
             if (sloped) {
+                scarf_base_speed = speed;
                 speed = std::min(speed, m_config.scarf_joint_speed.get_abs_value(m_config.get_abs_value("outer_wall_speed")));
+                if (speed < scarf_base_speed - 0.5) scarf_applied = true;
             }
-        } 
+        }
         else if(path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill) {
             speed = m_config.get_abs_value("internal_bridge_speed");
-        } else if (path.role() == erOverhangPerimeter || path.role() == erSupportTransition || path.role() == erBridgeInfill || path.role() == erExtraBridgeInfill) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::InternalBridge;
+        } else if (path.role() == erOverhangPerimeter) {
             speed = m_config.get_abs_value("bridge_speed");
+            m_current_g1_modifiers.base_type = BaseSpeedType::OverhangBridge;
+        } else if (path.role() == erSupportTransition || path.role() == erBridgeInfill || path.role() == erExtraBridgeInfill) {
+            speed = m_config.get_abs_value("bridge_speed");
+            m_current_g1_modifiers.base_type = BaseSpeedType::Bridge;
         } else if (path.role() == erInternalInfill) {
             speed = m_config.get_abs_value("sparse_infill_speed");
+            m_current_g1_modifiers.base_type = BaseSpeedType::Normal;
         } else if (path.role() == erSolidInfill) {
             speed = m_config.get_abs_value("internal_solid_infill_speed");
+            m_current_g1_modifiers.base_type = BaseSpeedType::Normal;
         } else if (path.role() == erTopSolidInfill) {
             speed = m_config.get_abs_value("top_surface_speed");
+            m_current_g1_modifiers.base_type = BaseSpeedType::TopSurface;
         } else if (path.role() == erIroning) {
             speed = m_config.get_abs_value("ironing_speed");
+            m_current_g1_modifiers.base_type = BaseSpeedType::Ironing;
         } else if (path.role() == erBottomSurface) {
             speed = m_config.get_abs_value("initial_layer_infill_speed");
+            m_current_g1_modifiers.base_type = BaseSpeedType::BottomSurface;
         } else if (path.role() == erGapFill) {
             speed = m_config.get_abs_value("gap_infill_speed");
+            m_current_g1_modifiers.base_type = BaseSpeedType::GapFill;
         }
         else if (path.role() == erSupportMaterial ||
                  path.role() == erSupportMaterialInterface) {
             const double  support_speed = m_config.support_speed.value;
             const double  support_interface_speed = m_config.get_abs_value("support_interface_speed");
             speed = (path.role() == erSupportMaterial) ? support_speed : support_interface_speed;
+            m_current_g1_modifiers.base_type = (path.role() == erSupportMaterial) ? BaseSpeedType::Support : BaseSpeedType::SupportInterface;
         } else {
             throw Slic3r::InvalidArgument("Invalid speed");
         }
+    } else {
+        // Speed was passed in externally - set base_type based on role
+        // and check for small perimeter tracking
+        if (path.role() == erPerimeter || path.role() == erExternalPerimeter) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::Normal;
+            // Check if small perimeter speed was applied
+            if (m_small_perimeter_state.applied && !is_bridge(path.role())) {
+                // Calculate what the original speed would have been
+                double original_speed = (path.role() == erPerimeter)
+                    ? m_config.get_abs_value("inner_wall_speed")
+                    : m_config.get_abs_value("outer_wall_speed");
+                // Record the small perimeter modifier
+                if (original_speed > speed + 0.5) {
+                    m_current_g1_modifiers.base_speed = static_cast<float>(original_speed);
+                    m_current_g1_modifiers.add_modifier(SpeedModifierEntry::Type::SmallPerimeter,
+                        static_cast<float>(original_speed - speed), static_cast<float>(speed));
+                }
+            }
+        } else if (path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::InternalBridge;
+        } else if (path.role() == erOverhangPerimeter) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::OverhangBridge;
+        } else if (path.role() == erSupportTransition || path.role() == erBridgeInfill || path.role() == erExtraBridgeInfill) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::Bridge;
+        } else if (path.role() == erInternalInfill || path.role() == erSolidInfill) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::Normal;
+        } else if (path.role() == erTopSolidInfill) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::TopSurface;
+        } else if (path.role() == erIroning) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::Ironing;
+        } else if (path.role() == erBottomSurface) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::BottomSurface;
+        } else if (path.role() == erGapFill) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::GapFill;
+        } else if (path.role() == erSupportMaterial) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::Support;
+        } else if (path.role() == erSupportMaterialInterface) {
+            m_current_g1_modifiers.base_type = BaseSpeedType::SupportInterface;
+        } else {
+            m_current_g1_modifiers.base_type = BaseSpeedType::Normal;
+        }
+    }
+
+    // Record base speed (before modifiers) if not already set by small perimeter handling
+    if (m_current_g1_modifiers.base_speed == 0.0f)
+        m_current_g1_modifiers.base_speed = static_cast<float>(speed);
+
+    // Record scarf joint modifier if applied
+    if (scarf_applied) {
+        m_current_g1_modifiers.base_speed = static_cast<float>(scarf_base_speed);
+        m_current_g1_modifiers.add_modifier(SpeedModifierEntry::Type::ScarfJoint,
+            static_cast<float>(scarf_base_speed - speed), static_cast<float>(speed));
     }
     //BBS: if not set the speed, then use the filament_max_volumetric_speed directly
     if (speed == 0)
@@ -5435,8 +5539,15 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     if (this->on_first_layer()) {
         //BBS: for solid infill of initial layer, speed can be higher as long as
         //wall lines have be attached
-        if (path.role() != erBottomSurface)
+        if (path.role() != erBottomSurface) {
+            double speed_before = speed;
             speed = m_config.get_abs_value("initial_layer_speed");
+            // Record FirstLayer modifier if it reduced speed
+            if (speed < speed_before - 0.5) {
+                m_current_g1_modifiers.add_modifier(SpeedModifierEntry::Type::FirstLayer,
+                    static_cast<float>(speed_before - speed), static_cast<float>(speed));
+            }
+        }
     }
     else if(m_config.slow_down_layers > 1){
         const auto _layer = layer_id();
@@ -5446,10 +5557,16 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                     ? m_config.get_abs_value("initial_layer_speed")
                     : m_config.get_abs_value("initial_layer_infill_speed");
             if (first_layer_speed < speed) {
+                double speed_before = speed;
                 speed = std::min(
                     speed,
                     Slic3r::lerp(first_layer_speed, speed,
                                  (double)_layer / m_config.slow_down_layers));
+                // Record SlowDownLayers modifier if it reduced speed
+                if (speed < speed_before - 0.5) {
+                    m_current_g1_modifiers.add_modifier(SpeedModifierEntry::Type::SlowDownLayers,
+                        static_cast<float>(speed_before - speed), static_cast<float>(speed));
+                }
             }
         }
     }
@@ -5471,7 +5588,13 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     //}
     if (EXTRUDER_CONFIG(filament_max_volumetric_speed) > 0) {
         // cap speed with max_volumetric_speed anyway (even if user is not using autospeed)
+        double speed_before = speed;
         speed = std::min(speed, EXTRUDER_CONFIG(filament_max_volumetric_speed) / _mm3_per_mm);
+        // Record VolumetricCap modifier if it reduced speed
+        if (speed < speed_before - 0.5) {
+            m_current_g1_modifiers.add_modifier(SpeedModifierEntry::Type::VolumetricCap,
+                static_cast<float>(speed_before - speed), static_cast<float>(speed));
+        }
     }
     // ORCA: resonance‑avoidance on short external perimeters
 {
@@ -5479,7 +5602,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     if (path.role() == erExternalPerimeter
         && m_config.resonance_avoidance.value) {
 
-        // if our original speed was above “max”, disable RA for this loop
+        // if our original speed was above "max", disable RA for this loop
         if (ref_speed > m_config.max_resonance_avoidance_speed.value) {
             m_resonance_avoidance = false;
         }
@@ -5492,10 +5615,16 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             );
         }
 
-        // if still in avoidance mode and under “max”, clamp to “min”
+        // if still in avoidance mode and under "max", clamp to "min"
         if (m_resonance_avoidance
             && speed <= m_config.max_resonance_avoidance_speed.value) {
+            double speed_before_ra = speed;
             speed = std::min(speed, m_config.min_resonance_avoidance_speed.value);
+            // Record ResonanceAvoidance modifier if it reduced speed
+            if (speed < speed_before_ra - 0.5) {
+                m_current_g1_modifiers.add_modifier(SpeedModifierEntry::Type::ResonanceAvoidance,
+                    static_cast<float>(speed_before_ra - speed), static_cast<float>(speed));
+            }
         }
 
         // reset flag for next segment
@@ -5865,6 +5994,11 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                             dE * e_ratio,
                             GCodeWriter::full_gcode_comment ? tempDescription : "", path.is_force_no_extrusion());
                     }
+                    // Speed modifier tracking: count G1 with E > 0 (actual extrusion)
+                    if (!path.is_force_no_extrusion()) {
+                        ++m_g1_extrusion_counter;
+                        m_g1_modifier_data[m_g1_extrusion_counter] = m_current_g1_modifiers;
+                    }
                 }
             } else {
                 // BBS: start to generate gcode from arc fitting data which includes line and arc
@@ -5894,6 +6028,11 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                                 this->point_to_gcode(line.b),
                                 dE,
                                 GCodeWriter::full_gcode_comment ? tempDescription : "", path.is_force_no_extrusion());
+                            // Speed modifier tracking: count G1 with E > 0 (actual extrusion)
+                            if (!path.is_force_no_extrusion()) {
+                                ++m_g1_extrusion_counter;
+                                m_g1_modifier_data[m_g1_extrusion_counter] = m_current_g1_modifiers;
+                            }
                         }
                         break;
                     }
@@ -5919,6 +6058,11 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                             dE,
                             arc.direction == ArcDirection::Arc_Dir_CCW,
                             GCodeWriter::full_gcode_comment ? tempDescription : "", path.is_force_no_extrusion());
+                        // Speed modifier tracking: count G2/G3 with E > 0 (actual extrusion)
+                        if (!path.is_force_no_extrusion()) {
+                            ++m_g1_extrusion_counter;
+                            m_g1_modifier_data[m_g1_extrusion_counter] = m_current_g1_modifiers;
+                        }
                         break;
                     }
                     default:
@@ -6040,12 +6184,35 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             }
             if (sloped == nullptr) {
                 // Normal extrusion
-                gcode += m_writer.extrude_to_xy(p, dE, GCodeWriter::full_gcode_comment ? tempDescription : "");
+                gcode += m_writer.extrude_to_xy(p, dE, GCodeWriter::full_gcode_comment ? tempDescription : "", path.is_force_no_extrusion());
             } else {
                 // Sloped extrusion
                 const auto [z_ratio, e_ratio] = sloped->interpolate(path_length / total_length);
                 Vec3d dest3d(p(0), p(1), get_sloped_z(z_ratio));
-                gcode += m_writer.extrude_to_xyz(dest3d, dE * e_ratio, GCodeWriter::full_gcode_comment ? tempDescription : "");
+                gcode += m_writer.extrude_to_xyz(dest3d, dE * e_ratio, GCodeWriter::full_gcode_comment ? tempDescription : "", path.is_force_no_extrusion());
+            }
+
+            // Speed modifier tracking for variable speed: update per-point modifiers
+            // Reset variable modifiers (Overhang, CurledEdge) and add new ones based on this point
+            m_current_g1_modifiers.reset_variable_modifiers();
+
+            // Add Overhang modifier if overlap indicates overhang
+            if (pre_processed_point.overlap < 0.99f) {
+                float overhang_percent = (1.0f - pre_processed_point.overlap) * 100.0f;
+                m_current_g1_modifiers.add_modifier(SpeedModifierEntry::Type::Overhang,
+                    overhang_percent, pre_processed_point.speed);
+            }
+
+            // Add CurledEdge modifier if curled slowdown was applied
+            if (pre_processed_point.has_curled_slowdown) {
+                m_current_g1_modifiers.add_modifier(SpeedModifierEntry::Type::CurledEdge,
+                    pre_processed_point.curled_height_factor, pre_processed_point.speed);
+            }
+
+            // Speed modifier tracking: count G1 with E > 0 (actual extrusion)
+            if (!path.is_force_no_extrusion()) {
+                ++m_g1_extrusion_counter;
+                m_g1_modifier_data[m_g1_extrusion_counter] = m_current_g1_modifiers;
             }
 
             prev = p;

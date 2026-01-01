@@ -24,16 +24,21 @@
 
 #include "GCode/PressureEqualizer.hpp"
 #include "GCode/SmallAreaInfillFlowCompensator.hpp"
+#include "GCode/SpeedModifier.hpp"
 // ORCA: post processor below used for Dynamic Pressure advance
 #include "GCode/AdaptivePAProcessor.hpp"
 
 #include <memory>
 #include <map>
+#include <unordered_map>
 #include <set>
 #include <string>
 #include <cfloat>
 
 namespace Slic3r {
+
+// G1ModifierData, SpeedModifierEntry, BaseSpeedType, CoolingModification
+// are now defined in GCode/SpeedModifier.hpp
 
 // Forward declarations.
 class GCode;
@@ -156,7 +161,12 @@ struct LayerResult {
     // It is used for the pressure equalizer because it needs to buffer one layer back.
     bool        nop_layer_result { false };
 
-    static LayerResult make_nop_layer_result() { return {"", std::numeric_limits<coord_t>::max(), false, false, true}; }
+    // Speed modifier tracking: per-layer data that travels through the pipeline
+    // This avoids race conditions with shared maps in the TBB pipeline
+    std::unordered_map<uint64_t, G1ModifierData> modifier_data;
+    std::unordered_map<uint64_t, CoolingModification> cooling_data;
+
+    static LayerResult make_nop_layer_result() { return {"", std::numeric_limits<coord_t>::max(), false, false, true, {}, {}}; }
 };
 
 class GCode {
@@ -209,6 +219,9 @@ public:
     const Layer*    layer() const { return m_layer; }
     GCodeWriter&    writer() { return m_writer; }
     const GCodeWriter& writer() const { return m_writer; }
+    // Speed modifier tracking accessors
+    const std::unordered_map<uint64_t, G1ModifierData>& get_g1_modifier_data() const { return m_g1_modifier_data; }
+    void clear_layer_modifier_data() { m_g1_modifier_data.clear(); }
     PlaceholderParser& placeholder_parser() { return m_placeholder_parser_integration.parser; }
     const PlaceholderParser& placeholder_parser() const { return m_placeholder_parser_integration.parser; }
     // Process a template through the placeholder parser, collect error messages to be reported
@@ -291,6 +304,10 @@ private:
         // Write a string into a file.
         void write(const std::string& what) { this->write(what.c_str()); }
         void write(const char* what);
+
+        // Write a LayerResult, passing modifier data to the processor before writing gcode.
+        // This is used by the TBB pipeline to ensure modifier data travels with each layer.
+        void write_layer(LayerResult&& layer);
 
         // Write a string into a file.
         // Add a newline, if the string does not end with a newline already.
@@ -587,6 +604,19 @@ private:
 
     // Processor
     GCodeProcessor m_processor;
+
+    // Speed modifier tracking - records WHY each G1 extrusion has its speed
+    uint64_t m_g1_extrusion_counter{ 0 };  // Counter for G1 E+ commands
+    std::unordered_map<uint64_t, G1ModifierData> m_g1_modifier_data;  // Per-G1 modifier data
+    G1ModifierData m_current_g1_modifiers;  // Accumulator for current G1
+
+    // Small perimeter state (passed from extrude_loop to _extrude)
+    struct SmallPerimeterState {
+        bool applied{ false };
+        float original_speed{ 0.0f };
+        float small_peri_speed{ 0.0f };
+    };
+    SmallPerimeterState m_small_perimeter_state;
 
     //some post-processing on the file, with their data class
     std::unique_ptr<FanMover> m_fan_mover;

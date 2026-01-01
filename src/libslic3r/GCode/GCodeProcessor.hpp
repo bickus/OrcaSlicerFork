@@ -6,6 +6,7 @@
 #include "libslic3r/ExtrusionEntity.hpp"
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/CustomGCode.hpp"
+#include "SpeedModifier.hpp"
 
 #include <cstdint>
 #include <array>
@@ -48,6 +49,9 @@ class Print;
         Extrude,
         Count
     };
+
+    // SpeedModifierEntry, BaseSpeedType, G1ModifierData, CoolingModification
+    // are now defined in SpeedModifier.hpp
 
     struct PrintEstimatedStatistics
     {
@@ -263,6 +267,17 @@ class Print;
                 if (distance < decel_start)
                     return actual_peak_speed();
                 return solve_speed(actual_peak_speed(), actual_exit_speed(), decel_len, distance - decel_start);
+            }
+
+            // Speed modifier tracking - records WHY the current speed is what it is
+            static constexpr uint8_t MaxSpeedModifiers = 5;
+            float base_speed{ 0.0f };  // Base speed before modifiers (mm/s)
+            SpeedModifierEntry speed_modifiers[MaxSpeedModifiers];
+            uint8_t speed_modifier_count{ 0 };
+            BaseSpeedType base_type{ BaseSpeedType::Normal };
+
+            bool has_speed_modifiers() const {
+                return base_speed > 0.0f || speed_modifier_count > 0;
             }
         };
 
@@ -876,6 +891,13 @@ class Print;
         int m_preheat_steps;
         bool m_disable_m73;
         int m_print_start_time{ 0 };
+
+        // Speed modifier tracking - receives data from GCode and CoolingBuffer per-layer
+        // Data is passed through the TBB pipeline and set before each layer is processed
+        uint64_t m_g1_extrusion_counter{ 0 };  // Counter for G1 E+ commands
+        std::unordered_map<uint64_t, G1ModifierData> m_layer_modifier_data;
+        std::unordered_map<uint64_t, CoolingModification> m_layer_cooling_data;
+
 #if ENABLE_GCODE_VIEWER_STATISTICS
         std::chrono::time_point<std::chrono::high_resolution_clock> m_start_time;
 #endif // ENABLE_GCODE_VIEWER_STATISTICS
@@ -934,6 +956,15 @@ class Print;
         }
         void enable_machine_envelope_processing(bool enabled) { m_time_processor.machine_envelope_processing_enabled = enabled; }
         void reset();
+
+        // Speed modifier tracking: set per-layer data before processing layer's gcode
+        void set_layer_data(std::unordered_map<uint64_t, G1ModifierData>&& modifier_data,
+                           std::unordered_map<uint64_t, CoolingModification>&& cooling_data) {
+            // Reset counter at layer start - per-layer counter for synchronization
+            m_g1_extrusion_counter = 0;
+            m_layer_modifier_data = std::move(modifier_data);
+            m_layer_cooling_data = std::move(cooling_data);
+        }
 
         const GCodeProcessorResult& get_result() const { return m_result; }
         GCodeProcessorResult& result() { return m_result; }
