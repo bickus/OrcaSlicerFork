@@ -5092,9 +5092,22 @@ std::string GCode::extrude_perimeters(const Print &print, const std::vector<Obje
 // Chain the paths hierarchically by a greedy algorithm to minimize a travel distance.
 std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectByExtruder::Island::Region> &by_region, bool ironing)
 {
-    std::string 		 gcode;
+    std::string          gcode;
     ExtrusionEntitiesPtr extrusions;
     const char*          extrusion_name = ironing ? "ironing" : "infill";
+
+    // Helper lambda to extrude a collection of entities
+    auto extrude_entities = [this, &gcode, extrusion_name](const ExtrusionEntitiesPtr &entities) {
+        for (const ExtrusionEntity *fill : entities) {
+            auto *eec = dynamic_cast<const ExtrusionEntityCollection*>(fill);
+            if (eec) {
+                for (ExtrusionEntity *ee : eec->chained_path_from(m_last_pos).entities)
+                    gcode += this->extrude_entity(*ee, extrusion_name);
+            } else
+                gcode += this->extrude_entity(*fill, extrusion_name);
+        }
+    };
+
     for (const ObjectByExtruder::Island::Region &region : by_region)
         if (! region.infills.empty()) {
             extrusions.clear();
@@ -5104,14 +5117,37 @@ std::string GCode::extrude_infill(const Print &print, const std::vector<ObjectBy
                     extrusions.emplace_back(ee);
             if (! extrusions.empty()) {
                 m_config.apply(print.get_print_region(&region - &by_region.front()).config());
-                chain_and_reorder_extrusion_entities(extrusions, &m_last_pos);
-                for (const ExtrusionEntity *fill : extrusions) {
-                    auto *eec = dynamic_cast<const ExtrusionEntityCollection*>(fill);
-                    if (eec) {
-                        for (ExtrusionEntity *ee : eec->chained_path_from(m_last_pos).entities)
-                            gcode += this->extrude_entity(*ee, extrusion_name);
-                    } else
-                        gcode += this->extrude_entity(*fill, extrusion_name);
+
+                // Check if we should print bridge infill at the end
+                if (m_config.bridge_infill_at_end && !ironing) {
+                    // Partition extrusions into non-bridge and bridge infill
+                    ExtrusionEntitiesPtr non_bridge_extrusions;
+                    ExtrusionEntitiesPtr bridge_extrusions;
+                    non_bridge_extrusions.reserve(extrusions.size());
+                    bridge_extrusions.reserve(extrusions.size());
+
+                    for (ExtrusionEntity *ee : extrusions) {
+                        if (is_bridge_infill(ee->role()))
+                            bridge_extrusions.emplace_back(ee);
+                        else
+                            non_bridge_extrusions.emplace_back(ee);
+                    }
+
+                    // Chain and print non-bridge infills first
+                    if (!non_bridge_extrusions.empty()) {
+                        chain_and_reorder_extrusion_entities(non_bridge_extrusions, &m_last_pos);
+                        extrude_entities(non_bridge_extrusions);
+                    }
+
+                    // Chain and print bridge infills last
+                    if (!bridge_extrusions.empty()) {
+                        chain_and_reorder_extrusion_entities(bridge_extrusions, &m_last_pos);
+                        extrude_entities(bridge_extrusions);
+                    }
+                } else {
+                    // Original behavior: chain all extrusions together
+                    chain_and_reorder_extrusion_entities(extrusions, &m_last_pos);
+                    extrude_entities(extrusions);
                 }
             }
         }

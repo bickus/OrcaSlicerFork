@@ -110,6 +110,14 @@ inline bool is_bridge(ExtrusionRole role) {
         || role == erOverhangPerimeter;
 }
 
+// Returns true for bridge INFILL roles only (excludes overhang perimeters)
+inline bool is_bridge_infill(ExtrusionRole role) {
+    return role == erBridgeInfill
+        || role == erInternalBridgeInfill
+        || role == erExtraBridgeInfill
+        || role == erExtraInternalBridgeInfill;
+}
+
 class ExtrusionEntity
 {
 public:

@@ -873,6 +873,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     // Orca
     ((ConfigOptionEnum<EnableExtraBridgeLayer>,  enable_extra_bridge_layer))
     ((ConfigOptionPercent,              internal_bridge_density))
+    ((ConfigOptionBool,                bridge_infill_at_end))
     // Overhang angle threshold.
     ((ConfigOptionInt,                 support_threshold_angle))
     ((ConfigOptionFloatOrPercent,      support_threshold_overlap))

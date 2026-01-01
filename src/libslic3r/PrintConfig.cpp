@@ -1749,6 +1749,13 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionBool{false});
 
+    def = this->add("bridge_infill_at_end", coBool);
+    def->label    = L("Print bridge infill last");
+    def->tooltip  = L("When enabled, bridge infill (both internal and external) will be printed after other infill types within each island. This groups all bridges together, reducing fan speed toggling between bridge and non-bridge areas, which can improve bridge quality and reduce wear on the part cooling fan.");
+    def->category = L("Quality");
+    def->mode     = comAdvanced;
+    def->set_default_value(new ConfigOptionBool{false});
+
     def = this->add("wall_direction", coEnum);
     def->label = L("Wall loop direction");
     def->category = L("Quality");
