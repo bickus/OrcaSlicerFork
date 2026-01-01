@@ -6357,11 +6357,27 @@ std::string GCode::travel_to(const Point& point, ExtrusionRole role, std::string
             jerk_to_set = m_config.initial_layer_jerk.value;
         }
     } else {
+        // Check if travel is adjacent to bridge/overhang
+        // is_bridge() returns true for: erBridgeInfill, erInternalBridgeInfill,
+        // erExtraBridgeInfill, erExtraInternalBridgeInfill, erOverhangPerimeter
+        bool travel_around_bridge = is_bridge(role) || is_bridge(m_last_processor_extrusion_role);
+
+        // Acceleration
         if (m_config.default_acceleration.value > 0 && m_config.travel_acceleration.value > 0) {
-            acceleration_to_set = (unsigned int) floor(m_config.travel_acceleration.value + 0.5);
+            if (travel_around_bridge && m_config.bridge_travel_acceleration.value > 0) {
+                acceleration_to_set = (unsigned int) floor(m_config.bridge_travel_acceleration.value + 0.5);
+            } else {
+                acceleration_to_set = (unsigned int) floor(m_config.travel_acceleration.value + 0.5);
+            }
         }
+
+        // Jerk
         if (m_config.default_jerk.value > 0 && m_config.travel_jerk.value > 0) {
-            jerk_to_set = m_config.travel_jerk.value;
+            if (travel_around_bridge && m_config.bridge_travel_jerk.value > 0) {
+                jerk_to_set = m_config.bridge_travel_jerk.value;
+            } else {
+                jerk_to_set = m_config.travel_jerk.value;
+            }
         }
     }
     if (m_writer.get_gcode_flavor() == gcfKlipper) {

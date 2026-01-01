@@ -2585,6 +2585,14 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(10000));
 
+    def = this->add("bridge_travel_acceleration", coFloat);
+    def->label = L("Travel around bridges");
+    def->tooltip = L("Acceleration for travel moves immediately before or after bridge and overhang extrusions. Set to 0 to use regular travel acceleration.");
+    def->sidetext = u8"mm/s²";	// milimeters per second per second, don't need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
+
     def = this->add("top_surface_acceleration", coFloat);
     def->label = L("Top surface");
     def->tooltip = L("Acceleration of top surface infill. Using a lower value may improve top surface quality.");
@@ -2739,6 +2747,14 @@ void PrintConfigDef::init_fff_params()
     def->min = 0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(12));
+
+    def = this->add("bridge_travel_jerk", coFloat);
+    def->label = L("Travel around bridges");
+    def->tooltip = L("Jerk for travel moves immediately before or after bridge and overhang extrusions. Set to 0 to use regular travel jerk.");
+    def->sidetext = "mm/s";	// milimeters per second, don't need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
 
     def = this->add("initial_layer_line_width", coFloatOrPercent);
     def->label = L("Initial layer");

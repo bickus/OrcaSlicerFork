@@ -2335,6 +2335,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("initial_layer_acceleration", "speed_settings_acceleration#initial-layer");
         optgroup->append_single_option_line("top_surface_acceleration", "speed_settings_acceleration#top-surface");
         optgroup->append_single_option_line("travel_acceleration", "speed_settings_acceleration#travel");
+        optgroup->append_single_option_line("bridge_travel_acceleration", "speed_settings_acceleration#travel-around-bridges");
         optgroup->append_single_option_line("accel_to_decel_enable", "speed_settings_acceleration");
         optgroup->append_single_option_line("accel_to_decel_factor", "speed_settings_acceleration");
 
@@ -2348,6 +2349,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("top_surface_jerk", "speed_settings_jerk_xy#top-surface");
         optgroup->append_single_option_line("initial_layer_jerk", "speed_settings_jerk_xy#initial-layer");
         optgroup->append_single_option_line("travel_jerk", "speed_settings_jerk_xy#travel");
+        optgroup->append_single_option_line("bridge_travel_jerk", "speed_settings_jerk_xy#travel-around-bridges");
         optgroup->append_single_option_line("default_junction_deviation", "speed_settings_jerk_xy#junction-deviation");
 
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced", 15);
