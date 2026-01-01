@@ -504,9 +504,10 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
         case EViewType::Feedrate: {
             // Center the "Requested Speed" line (empty line already added by else branch above)
             sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
-            float text_width = ImGui::CalcTextSize(buf).x;
+            float text_width   = ImGui::CalcTextSize(buf).x;
             float window_width = ImGui::GetWindowWidth();
-            ImGui::SetCursorPosX((window_width - text_width) * 0.5f);
+            ImGui::SameLine((window_width - text_width) * 0.5f);
+            ImGui::PushItemWidth(text_width);
             imgui.text(buf);
 
             // Speed modifier tracking: show modifier chain if available

@@ -353,6 +353,55 @@ Removed complex `in_extrusion_block` tracking in CoolingBuffer. Now all componen
 
 ---
 
+## Bug Fix 6: CurledEdge Showing When It Didn't Limit Speed
+
+### Problem
+CurledEdge modifier was displayed whenever curled edge influence was considered, even if overhang had already slowed the speed more than curled edge would have.
+
+### Solution
+**File:** `src/libslic3r/GCode/ExtrusionProcessor.hpp` (lines 456-461)
+
+Changed the condition from "curled edge influence exists" to "curled edge actually reduced speed":
+```cpp
+// Before: set true whenever there's curled edge influence
+if (artificial_distance_to_curled_lines > 0.001f) {
+    has_curled_slowdown = true;
+}
+
+// After: only set true when curled edge actually limits speed
+if (curled_speed < extrusion_speed && artificial_distance_to_curled_lines > 0.001f) {
+    has_curled_slowdown = true;
+    curled_height_factor = artificial_distance_to_curled_lines;
+}
+extrusion_speed = std::min(curled_speed, extrusion_speed);
+```
+
+---
+
+## UI Improvements
+
+### File: `src/slic3r/GUI/GCodeViewer.cpp`
+
+**Tooltip formatting for Feedrate view:**
+- Requested Speed line centered in tooltip
+- Single empty line between XYZ coordinates and Requested Speed
+- No empty line between Requested Speed and modifier chain
+- Base/modifier labels use highlight color (same as "Requested Speed:") instead of bold
+- Arrow changed from "→" to ">" for compatibility
+- Special base types (Bridge, Gap Fill, etc.) display as "Bridge: 600" instead of "Base: 600 (Bridge)"
+
+**Example output:**
+```
+X: 100.000    Y: 200.000    Z: 0.200
+
+           Requested Speed: 219
+Base: 600
+> Volumetric (-333): 267
+> Overhang (6%): 219
+```
+
+---
+
 ## Summary
 
 All 8 implementation phases completed, plus:
@@ -364,5 +413,7 @@ All 8 implementation phases completed, plus:
    - Bug 3: Variable speed path missing force_no_extrusion check
    - Bug 4: CoolingBuffer didn't count non-adjustable extrusions (dont_slow_down_outer_wall)
    - Bug 5: Counter drift across layers (fixed with per-layer reset)
+4. Bug fix 6: CurledEdge modifier only shown when it actually limits speed
+5. UI improvements: centered speed display, proper color formatting, cleaner layout
 
 Feature is ready for testing after successful compilation.
