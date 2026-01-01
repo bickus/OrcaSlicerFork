@@ -286,7 +286,6 @@ struct ProcessedPoint
     Point p;
     float speed = 1.0f;
     float overlap = 1.0f;
-    bool curled_edge_slowdown = false; // True if speed was reduced due to curled edges
 };
 
 class ExtrusionQualityEstimator
@@ -446,19 +445,15 @@ public:
             // ORCA: Clamp resulting speed to lowest of calculated speed based on the overhang values and the current speed
             // Fixes bug where resulting overhang speed is higher than the current speed due to (for example) volumetric flow limits.
             extrusion_speed = std::min(extrusion_speed, original_speed);
-
-            bool is_curled_edge_slowdown = false;
+            
             if(slowdown_for_curled_edges) {
                 float curled_speed = calculate_speed(artificial_distance_to_curled_lines);
-                if (curled_speed < extrusion_speed) {
-                    is_curled_edge_slowdown = true; // Track that curled edge caused the slowdown
-                }
             	extrusion_speed       = std::min(curled_speed, extrusion_speed); // adjust extrusion speed based on what is smallest - the calculated overhang speed or the artificial curled speed
             }
-
+            
             float overlap = std::min(1 - (curr.distance+artificial_distance_to_curled_lines) * width_inv, 1 - (next.distance+artificial_distance_to_curled_lines) * width_inv);
-
-            processed_points.push_back({ scaled(curr.position), extrusion_speed, overlap, is_curled_edge_slowdown });
+			
+            processed_points.push_back({ scaled(curr.position), extrusion_speed, overlap });
         }
         return processed_points;
     }

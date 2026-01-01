@@ -923,12 +923,6 @@ std::string CoolingBuffer::apply_layer_cooldown(
                 new_gcode.append(line_start, end - line_start);
                 current_feedrate = new_feedrate;
             }
-            // Track original feedrate before slowdown for layer cooling modifier
-            int original_feedrate_for_cooling = 0;
-            if (line->slowdown) {
-                original_feedrate_for_cooling = atoi(fpos);
-            }
-
             if (modify || remove) {
                 if (modify) {
                     // Replace the feedrate.
@@ -937,15 +931,6 @@ std::string CoolingBuffer::apply_layer_cooldown(
                     char buf[64];
                     sprintf(buf, "%d", int(current_feedrate));
                     new_gcode += buf;
-
-                    // Emit layer cooling modifier comment for tooltip display
-                    if (line->slowdown && original_feedrate_for_cooling > 0) {
-                        int reduction = original_feedrate_for_cooling - current_feedrate;
-                        if (reduction > 0) {
-                            sprintf(buf, " ;SPEED_MOD_ADD:LC:%d:%d", reduction / 60, current_feedrate / 60);
-                            new_gcode += buf;
-                        }
-                    }
                 } else {
                     // Remove the feedrate word.
                     const char *f = fpos;

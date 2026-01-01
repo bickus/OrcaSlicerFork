@@ -463,58 +463,10 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
             break;
         }
         case EViewType::Feedrate: {
-            // Center the speed line
+            ImGui::SameLine(startx2);
             sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
-            float text_width = ImGui::CalcTextSize(buf).x;
-            float window_width = ImGui::GetWindowSize().x;
-            float center_pos = (window_width - text_width) * 0.5f;
-            ImGui::SetCursorPosX(center_pos);
             ImGui::PushItemWidth(item_size);
             imgui.text(buf);
-
-            // Show speed modifier chain if available
-            if (m_curr_move.has_speed_modifiers()) {
-                // Helper to get modifier type name
-                auto get_modifier_name = [](GCodeProcessorResult::SpeedModifierEntry::Type type) -> std::string {
-                    using Type = GCodeProcessorResult::SpeedModifierEntry::Type;
-                    switch (type) {
-                        case Type::FirstLayer:         return _u8L("First Layer");
-                        case Type::SlowDownLayers:     return _u8L("Slow Down Layers");
-                        case Type::Overhang:           return _u8L("Overhang");
-                        case Type::LayerTimeCooling:   return _u8L("Layer Cooling");
-                        case Type::VolumetricCap:      return _u8L("Volumetric Limit");
-                        case Type::ResonanceAvoidance: return _u8L("Resonance Avoid");
-                        case Type::SmallPerimeter:     return _u8L("Small Perimeter");
-                        case Type::ScarfJoint:         return _u8L("Scarf Joint");
-                        case Type::CurledEdge:         return _u8L("Curled Edge");
-                        default:                       return "Unknown";
-                    }
-                };
-
-                // Show base speed
-                std::string base_label = ImGui::ColorMarkerStart + _u8L("Base: ") + ImGui::ColorMarkerEnd;
-                sprintf(buf, "%s%.0f mm/s", base_label.c_str(), m_curr_move.base_speed);
-                imgui.text(buf);
-
-                // Show each modifier in the chain
-                for (uint8_t i = 0; i < m_curr_move.speed_modifier_count; ++i) {
-                    const auto& mod = m_curr_move.speed_modifiers[i];
-                    std::string arrow = ImGui::ColorMarkerStart + std::string("-> ") + ImGui::ColorMarkerEnd;
-                    std::string mod_name = get_modifier_name(mod.type);
-
-                    // For overhang, show the percentage
-                    if (mod.type == GCodeProcessorResult::SpeedModifierEntry::Type::Overhang) {
-                        sprintf(buf, "%s%s %.0f%%: %.0f mm/s", arrow.c_str(), mod_name.c_str(), mod.value, mod.speed_after);
-                    } else {
-                        sprintf(buf, "%s%s: %.0f mm/s (%.0f)", arrow.c_str(), mod_name.c_str(), mod.speed_after, -mod.value);
-                    }
-                    imgui.text(buf);
-                }
-
-                // Update text_line to account for additional modifier lines
-                // Base line (1) + modifier count
-                text_line = 2 + 1 + m_curr_move.speed_modifier_count;
-            }
             break;
         }
         case EViewType::VolumetricRate: {
@@ -555,9 +507,7 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
         default:
             break;
         }
-        // Only set default text_line if not already set by a specific case (e.g., Feedrate with modifiers)
-        if (text_line == 0)
-            text_line = 2;
+        text_line = 2;
     }
     // else {
     //     sprintf(buf, "%s%.3f", x.c_str(), position.x() - plate->get_origin().x());

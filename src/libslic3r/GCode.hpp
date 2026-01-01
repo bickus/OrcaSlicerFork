@@ -602,36 +602,6 @@ private:
     // BBS
     int get_bed_temperature(const int extruder_id, const bool is_first_layer, const BedType bed_type) const;
 
-    // Speed modifier tracking for tooltip display
-    struct SpeedModifierTracker {
-        float base_speed{ 0.0f };
-        GCodeProcessorResult::SpeedModifierEntry entries[GCodeProcessorResult::MaxSpeedModifiers];
-        uint8_t count{ 0 };
-
-        void reset() {
-            base_speed = 0.0f;
-            count = 0;
-        }
-
-        void add(GCodeProcessorResult::SpeedModifierEntry::Type type, float value, float speed_after) {
-            if (count < GCodeProcessorResult::MaxSpeedModifiers) {
-                entries[count].type = type;
-                entries[count].value = value;
-                entries[count].speed_after = speed_after;
-                ++count;
-            }
-        }
-
-        bool has_modifiers() const { return count > 0; }
-    };
-    SpeedModifierTracker m_speed_modifier_tracker;
-
-    // Small perimeter speed tracking - set by extrude_loop, used by _extrude
-    double m_small_perimeter_speed{ -1.0 };
-
-    // Format speed modifier comment for G-code
-    std::string format_speed_modifier_comment() const;
-
     std::string _extrude(const ExtrusionPath &path, std::string description = "", double speed = -1);
     bool _needSAFC(const ExtrusionPath &path);
     void print_machine_envelope(GCodeOutputStream &file, Print &print);

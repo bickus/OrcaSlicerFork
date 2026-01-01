@@ -732,8 +732,7 @@ const std::vector<std::string> GCodeProcessor::Reserved_Tags = {
     "_DURING_PRINT_EXHAUST_FAN",
     " WIPE_TOWER_START",
     " WIPE_TOWER_END",
-    " PA_CHANGE:",
-    "SPEED_MODS:"
+    " PA_CHANGE:"
 };
 
 const std::vector<std::string> GCodeProcessor::Reserved_Tags_compatible = {
@@ -754,8 +753,7 @@ const std::vector<std::string> GCodeProcessor::Reserved_Tags_compatible = {
     "_DURING_PRINT_EXHAUST_FAN",
     " WIPE_TOWER_START",
     " WIPE_TOWER_END",
-    " PA_CHANGE:",
-    "SPEED_MODS:"
+    " PA_CHANGE:"
 };
 
 
@@ -2557,11 +2555,8 @@ void GCodeProcessor::process_gcode_line(const GCodeReader::GCodeLine& line, bool
     ++m_line_id;
 
     const std::string_view comment_view = line.comment();
-    if (!comment_view.empty()) {
+    if (!comment_view.empty())
         parse_estimated_time_comment(comment_view);
-        // Also parse speed modifier tags from inline comments (e.g., SPEED_MOD_ADD from CoolingBuffer)
-        process_inline_speed_modifier_comment(comment_view);
-    }
 
     // update start position
     m_start_position = m_end_position;
@@ -2919,100 +2914,6 @@ bool GCodeProcessor::get_last_z_from_gcode(const std::string& gcode_str, double&
     return is_z_changed;
 }
 
-// Process speed modifier comments from inline G1 comments (e.g., SPEED_MOD_ADD from CoolingBuffer)
-void GCodeProcessor::process_inline_speed_modifier_comment(const std::string_view comment)
-{
-    std::string comment_str(comment);
-
-    // Helper to convert code to type
-    auto code_to_type = [](const std::string& code) -> GCodeProcessorResult::SpeedModifierEntry::Type {
-        using Type = GCodeProcessorResult::SpeedModifierEntry::Type;
-        if (code == "FL") return Type::FirstLayer;
-        if (code == "SL") return Type::SlowDownLayers;
-        if (code == "OH") return Type::Overhang;
-        if (code == "LC") return Type::LayerTimeCooling;
-        if (code == "VC") return Type::VolumetricCap;
-        if (code == "RA") return Type::ResonanceAvoidance;
-        if (code == "SP") return Type::SmallPerimeter;
-        if (code == "SJ") return Type::ScarfJoint;
-        if (code == "CE") return Type::CurledEdge;
-        return Type::None;
-    };
-
-    // Find SPEED_MODS tag anywhere in the comment
-    size_t speed_mods_pos = comment_str.find(reserved_tag(ETags::Speed_Modifiers));
-    size_t speed_mod_add_pos = comment_str.find("SPEED_MOD_ADD:");
-
-    // Parse SPEED_MODS if found (resets and sets up base + modifiers)
-    if (speed_mods_pos != std::string::npos) {
-        std::string data = comment_str.substr(speed_mods_pos + reserved_tag(ETags::Speed_Modifiers).length());
-        // Trim at next comment marker if any
-        size_t next_comment = data.find(" ;");
-        if (next_comment == std::string::npos)
-            next_comment = data.find(';');
-        if (next_comment != std::string::npos)
-            data = data.substr(0, next_comment);
-
-        m_speed_mod_count = 0;
-        m_speed_mod_base = 0.0f;
-
-        std::vector<std::string> parts;
-        boost::split(parts, data, boost::is_any_of("|"), boost::token_compress_on);
-
-        if (!parts.empty()) {
-            if (parse_number(parts[0], m_speed_mod_base)) {
-                for (size_t i = 1; i < parts.size() && m_speed_mod_count < GCodeProcessorResult::MaxSpeedModifiers; ++i) {
-                    std::vector<std::string> entry_parts;
-                    boost::split(entry_parts, parts[i], boost::is_any_of(":"), boost::token_compress_on);
-                    if (entry_parts.size() >= 3) {
-                        auto type = code_to_type(entry_parts[0]);
-                        if (type != GCodeProcessorResult::SpeedModifierEntry::Type::None) {
-                            float val = 0.0f, after = 0.0f;
-                            if (parse_number(entry_parts[1], val) && parse_number(entry_parts[2], after)) {
-                                m_speed_mod_entries[m_speed_mod_count].type = type;
-                                m_speed_mod_entries[m_speed_mod_count].value = val;
-                                m_speed_mod_entries[m_speed_mod_count].speed_after = after;
-                                ++m_speed_mod_count;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Parse SPEED_MOD_ADD if found (adds to existing modifiers)
-    if (speed_mod_add_pos != std::string::npos) {
-        std::string data = comment_str.substr(speed_mod_add_pos + 14); // Skip "SPEED_MOD_ADD:"
-        // Trim at next comment marker if any
-        size_t next_comment = data.find(" ;");
-        if (next_comment == std::string::npos)
-            next_comment = data.find(';');
-        if (next_comment != std::string::npos)
-            data = data.substr(0, next_comment);
-        // Trim trailing whitespace
-        boost::trim(data);
-
-        std::vector<std::string> parts;
-        boost::split(parts, data, boost::is_any_of(":"), boost::token_compress_on);
-
-        if (parts.size() >= 3 && m_speed_mod_count < GCodeProcessorResult::MaxSpeedModifiers) {
-            auto type = code_to_type(boost::trim_copy(parts[0]));
-            if (type != GCodeProcessorResult::SpeedModifierEntry::Type::None) {
-                float val = 0.0f, after = 0.0f;
-                std::string val_str = boost::trim_copy(parts[1]);
-                std::string after_str = boost::trim_copy(parts[2]);
-                if (parse_number(std::string_view(val_str), val) && parse_number(std::string_view(after_str), after)) {
-                    m_speed_mod_entries[m_speed_mod_count].type = type;
-                    m_speed_mod_entries[m_speed_mod_count].value = val;
-                    m_speed_mod_entries[m_speed_mod_count].speed_after = after;
-                    ++m_speed_mod_count;
-                }
-            }
-        }
-    }
-}
-
 void GCodeProcessor::process_tags(const std::string_view comment, bool producers_enabled)
 {
     // producers tags
@@ -3101,106 +3002,6 @@ void GCodeProcessor::process_tags(const std::string_view comment, bool producers
                 process_T(tool_change_cmd);
             }
         }
-    }
-
-    // Speed modifiers parsing - handles both SPEED_MODS and SPEED_MOD_ADD
-    // They can appear together in one comment when CoolingBuffer adds layer cooling
-    // Format: ;SPEED_MOD_ADD:LC:50:30 ;SPEED_MODS:600|OH:58:80
-    // We need to parse SPEED_MODS first, then add SPEED_MOD_ADD
-
-    auto code_to_type = [](const std::string& code) -> GCodeProcessorResult::SpeedModifierEntry::Type {
-        using Type = GCodeProcessorResult::SpeedModifierEntry::Type;
-        if (code == "FL") return Type::FirstLayer;
-        if (code == "SL") return Type::SlowDownLayers;
-        if (code == "OH") return Type::Overhang;
-        if (code == "LC") return Type::LayerTimeCooling;
-        if (code == "VC") return Type::VolumetricCap;
-        if (code == "RA") return Type::ResonanceAvoidance;
-        if (code == "SP") return Type::SmallPerimeter;
-        if (code == "SJ") return Type::ScarfJoint;
-        if (code == "CE") return Type::CurledEdge;
-        return Type::None;
-    };
-
-    // Find SPEED_MODS tag anywhere in the comment
-    std::string comment_str(comment);
-    size_t speed_mods_pos = comment_str.find(reserved_tag(ETags::Speed_Modifiers));
-    size_t speed_mod_add_pos = comment_str.find("SPEED_MOD_ADD:");
-
-    bool has_speed_mods = (speed_mods_pos != std::string::npos);
-    bool has_speed_mod_add = (speed_mod_add_pos != std::string::npos);
-
-    if (has_speed_mods || has_speed_mod_add) {
-        // Parse SPEED_MODS first (it sets up base and existing modifiers)
-        if (has_speed_mods) {
-            std::string data = comment_str.substr(speed_mods_pos + reserved_tag(ETags::Speed_Modifiers).length());
-            // Trim at next comment marker if any
-            size_t next_comment = data.find(" ;");
-            if (next_comment != std::string::npos)
-                data = data.substr(0, next_comment);
-
-            m_speed_mod_count = 0;
-            m_speed_mod_base = 0.0f;
-
-            std::vector<std::string> parts;
-            boost::split(parts, data, boost::is_any_of("|"), boost::token_compress_on);
-
-            if (!parts.empty()) {
-                // First part is base speed
-                if (parse_number(parts[0], m_speed_mod_base)) {
-                    // Parse modifier entries
-                    for (size_t i = 1; i < parts.size() && m_speed_mod_count < GCodeProcessorResult::MaxSpeedModifiers; ++i) {
-                        std::vector<std::string> entry_parts;
-                        boost::split(entry_parts, parts[i], boost::is_any_of(":"), boost::token_compress_on);
-                        if (entry_parts.size() >= 3) {
-                            auto type = code_to_type(entry_parts[0]);
-                            if (type != GCodeProcessorResult::SpeedModifierEntry::Type::None) {
-                                float val = 0.0f, after = 0.0f;
-                                if (parse_number(entry_parts[1], val) && parse_number(entry_parts[2], after)) {
-                                    m_speed_mod_entries[m_speed_mod_count].type = type;
-                                    m_speed_mod_entries[m_speed_mod_count].value = val;
-                                    m_speed_mod_entries[m_speed_mod_count].speed_after = after;
-                                    ++m_speed_mod_count;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Parse SPEED_MOD_ADD (adds to existing modifiers)
-        if (has_speed_mod_add) {
-            std::string data = comment_str.substr(speed_mod_add_pos + 14); // Skip "SPEED_MOD_ADD:"
-            // Trim at next comment marker if any (could be " ;" or just ";")
-            size_t next_comment = data.find(" ;");
-            if (next_comment == std::string::npos)
-                next_comment = data.find(';');
-            if (next_comment != std::string::npos)
-                data = data.substr(0, next_comment);
-            // Trim trailing whitespace
-            boost::trim(data);
-
-            std::vector<std::string> parts;
-            boost::split(parts, data, boost::is_any_of(":"), boost::token_compress_on);
-
-            if (parts.size() >= 3 && m_speed_mod_count < GCodeProcessorResult::MaxSpeedModifiers) {
-                auto type = code_to_type(boost::trim_copy(parts[0]));
-                if (type != GCodeProcessorResult::SpeedModifierEntry::Type::None) {
-                    float val = 0.0f, after = 0.0f;
-                    std::string val_str = boost::trim_copy(parts[1]);
-                    std::string after_str = boost::trim_copy(parts[2]);
-                    if (parse_number(std::string_view(val_str), val) && parse_number(std::string_view(after_str), after)) {
-                        m_speed_mod_entries[m_speed_mod_count].type = type;
-                        m_speed_mod_entries[m_speed_mod_count].value = val;
-                        m_speed_mod_entries[m_speed_mod_count].speed_after = after;
-                        ++m_speed_mod_count;
-                    }
-                }
-            }
-        }
-
-        return;
     }
 
     // color change tag
@@ -6379,15 +6180,6 @@ void GCodeProcessor::store_move_vertex(EMoveType type, EMovePathType path_type)
         GCodeProcessorResult::MoveVertex::LimitingFactor::Prepare :
         GCodeProcessorResult::MoveVertex::LimitingFactor::Requested;
     move.kinematics.has_kinematics = false;
-
-    // Copy speed modifier data for tooltip display
-    // Note: We don't reset here because one SPEED_MODS comment applies to
-    // multiple G1 moves in a path. Reset happens when a new SPEED_MODS is parsed.
-    move.base_speed = m_speed_mod_base;
-    move.speed_modifier_count = m_speed_mod_count;
-    for (uint8_t i = 0; i < m_speed_mod_count && i < GCodeProcessorResult::MaxSpeedModifiers; ++i) {
-        move.speed_modifiers[i] = m_speed_mod_entries[i];
-    }
 
     if (type == EMoveType::Seam) {
         m_seams_count++;
