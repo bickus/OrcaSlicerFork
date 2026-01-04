@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo:*)",
+      "Bash(cat:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(mkdir:*)",
+      "Skill(skill-creator)",
+      "Bash(unzip:*)",
+      "Bash(git -C /mnt/e/wsl/git/OrcaSlicerFork diff HEAD src/libslic3r/Preset.cpp)",
+      "Bash(git show:*)",
+      "Bash(git log:*)"
+    ]
+  },
+  "outputStyle": "default"
+}
