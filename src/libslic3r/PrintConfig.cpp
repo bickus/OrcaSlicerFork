@@ -4483,15 +4483,6 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
-    def = this->add("print_start_time", coInt);
-    def->label = L("Print start time");
-    def->tooltip = L("Additional time to add to the estimated print preparation time, accounting for "
-                   "printer startup procedures not captured in the G-code (e.g., homing, bed leveling, heating).");
-    def->sidetext = L("s");
-    def->min = 0;
-    def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionInt(0));
-
     def = this->add("seam_position", coEnum);
     def->label = L("Seam position");
     def->category = L("Quality");
