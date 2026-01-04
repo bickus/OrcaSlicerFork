@@ -852,11 +852,6 @@ void ConfigManipulation::toggle_print_fff_options(DynamicPrintConfig *config, co
     bool have_small_area_infill_flow_compensation = config->opt_bool("small_area_infill_flow_compensation");
     toggle_line("small_area_infill_flow_compensation_model", have_small_area_infill_flow_compensation);
 
-    // Orca: steep slope solid infill
-    bool have_steep_slope_infill = config->option("solid_infill_under_steep_slopes") &&
-        config->opt_enum<SteepSlopeInfillMode>("solid_infill_under_steep_slopes") == ssimEnabled;
-    toggle_line("steep_slope_angle_threshold", have_steep_slope_infill);
-
 
     toggle_field("seam_slope_type", !has_spiral_vase);
     bool has_seam_slope = !has_spiral_vase && config->opt_enum<SeamScarfType>("seam_slope_type") != SeamScarfType::None;
