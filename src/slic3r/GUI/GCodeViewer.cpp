@@ -88,45 +88,6 @@ else if (view_type == GCodeViewer::EViewType::LayerTimeLog)
     return "";
 }
 
-// Speed modifier tracking - helper to get modifier type name
-static const char* get_modifier_name(SpeedModifierEntry::Type type) {
-    switch (type) {
-        case SpeedModifierEntry::Type::None:               return "None";
-        case SpeedModifierEntry::Type::FirstLayer:         return "First Layer";
-        case SpeedModifierEntry::Type::SlowDownLayers:     return "Slow Down Layer";
-        case SpeedModifierEntry::Type::Overhang:           return "Overhang";
-        case SpeedModifierEntry::Type::LayerTimeCooling:   return "Layer Time";
-        case SpeedModifierEntry::Type::VolumetricCap:      return "Volumetric";
-        case SpeedModifierEntry::Type::ResonanceAvoidance: return "Resonance";
-        case SpeedModifierEntry::Type::SmallPerimeter:     return "Small Perimeter";
-        case SpeedModifierEntry::Type::ScarfJoint:         return "Scarf Joint";
-        case SpeedModifierEntry::Type::CurledEdge:         return "Curled Edge";
-        case SpeedModifierEntry::Type::Bridge:             return "Bridge";
-        case SpeedModifierEntry::Type::GapFill:            return "Gap Fill";
-        default:                                           return "Unknown";
-    }
-}
-
-// Speed modifier tracking - helper to get base speed type label
-static const char* get_base_type_label(BaseSpeedType type) {
-    switch (type) {
-        case BaseSpeedType::Normal:           return "";  // No special label for normal
-        case BaseSpeedType::Bridge:           return "Bridge";
-        case BaseSpeedType::InternalBridge:   return "Internal Bridge";
-        case BaseSpeedType::OverhangBridge:   return "Overhang Bridge";
-        case BaseSpeedType::Support:          return "Support";
-        case BaseSpeedType::SupportInterface: return "Support Interface";
-        case BaseSpeedType::TopSurface:       return "Top Surface";
-        case BaseSpeedType::BottomSurface:    return "Bottom Surface";
-        case BaseSpeedType::GapFill:          return "Gap Fill";
-        case BaseSpeedType::Ironing:          return "Ironing";
-        case BaseSpeedType::ThinWall:         return "Thin Wall";
-        case BaseSpeedType::Skirt:            return "Skirt";
-        case BaseSpeedType::Brim:             return "Brim";
-        default:                              return "";
-    }
-}
-
 static unsigned char buffer_id(EMoveType type) {
     return static_cast<unsigned char>(type) - static_cast<unsigned char>(EMoveType::Retract);
 }
@@ -502,49 +463,10 @@ void GCodeViewer::SequentialView::Marker::render(int canvas_width, int canvas_he
             break;
         }
         case EViewType::Feedrate: {
-            // Center the "Requested Speed" line (empty line already added by else branch above)
+            ImGui::SameLine(startx2);
             sprintf(buf, "%s%.0f", speed.c_str(), m_curr_move.feedrate);
-            float text_width   = ImGui::CalcTextSize(buf).x;
-            float window_width = ImGui::GetWindowWidth();
-            ImGui::SameLine((window_width - text_width) * 0.5f);
-            ImGui::PushItemWidth(text_width);
+            ImGui::PushItemWidth(item_size);
             imgui.text(buf);
-
-            // Speed modifier tracking: show modifier chain if available
-            if (m_curr_move.has_speed_modifiers()) {
-                // Show base speed - use type label directly for special types (Bridge, Gap Fill, etc.)
-                const char* base_label = get_base_type_label(m_curr_move.base_type);
-                std::string base_line(1, ImGui::ColorMarkerStart);
-                if (base_label[0] != '\0') {
-                    base_line += base_label;
-                    base_line += ":";
-                } else {
-                    base_line += "Base:";
-                }
-                base_line += ImGui::ColorMarkerEnd;
-                sprintf(buf, "%s %.0f", base_line.c_str(), m_curr_move.base_speed);
-                imgui.text(buf);
-
-                // Show modifier chain
-                for (uint8_t i = 0; i < m_curr_move.speed_modifier_count; ++i) {
-                    const auto& mod = m_curr_move.speed_modifiers[i];
-                    const char* mod_name = get_modifier_name(mod.type);
-
-                    // Arrow and modifier name in highlight color, speed values in regular
-                    std::string mod_label(1, ImGui::ColorMarkerStart);
-                    mod_label += "> ";
-                    mod_label += mod_name;
-                    mod_label += ImGui::ColorMarkerEnd;
-
-                    if (mod.type == SpeedModifierEntry::Type::Overhang)
-                        sprintf(buf, "%s (%.0f%%): %.0f", mod_label.c_str(), mod.value, mod.speed_after);
-                    else if (mod.type == SpeedModifierEntry::Type::CurledEdge)
-                        sprintf(buf, "%s (%.2f): %.0f", mod_label.c_str(), mod.value, mod.speed_after);
-                    else
-                        sprintf(buf, "%s (-%.0f): %.0f", mod_label.c_str(), mod.value, mod.speed_after);
-                    imgui.text(buf);
-                }
-            }
             break;
         }
         case EViewType::VolumetricRate: {
@@ -831,7 +753,7 @@ void GCodeViewer::SequentialView::render(const bool has_render_path, float legen
     if (wxGetApp().is_editor())
         bottom -= wxGetApp().plater()->get_view_toolbar().get_height();
 #endif
-    if (has_render_path && current.last < gcode_ids.size())
+    if (has_render_path)
         gcode_window.render(legend_height + 2, std::max(10.f, (float)canvas_height - 40), (float)canvas_width - (float)right_margin, static_cast<uint64_t>(gcode_ids[current.last]));
 }
 
@@ -2194,9 +2116,7 @@ void GCodeViewer::update_moves_slider(bool set_to_max)
         unsigned int        count = 0;
         for (unsigned int i = view.endpoints.first; i <= view.endpoints.last; ++i) {
             values[count] = static_cast<double>(i + 1);
-            // Bounds check for gcode_ids - endpoints may occasionally exceed vector size
-            if (i < view.gcode_ids.size() && view.gcode_ids[i] > 0)
-                alternate_values[count] = static_cast<double>(view.gcode_ids[i]);
+            if (view.gcode_ids[i] > 0) alternate_values[count] = static_cast<double>(view.gcode_ids[i]);
             ++count;
         }
 

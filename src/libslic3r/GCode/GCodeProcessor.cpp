@@ -7,8 +7,6 @@
 #include "libslic3r/LocalesUtils.hpp"
 #include "libslic3r/format.hpp"
 #include "GCodeProcessor.hpp"
-#include "CoolingBuffer.hpp"
-#include "libslic3r/GCode.hpp"
 
 #include <boost/log/trivial.hpp>
 #include <boost/algorithm/string/predicate.hpp>
@@ -6182,32 +6180,6 @@ void GCodeProcessor::store_move_vertex(EMoveType type, EMovePathType path_type)
         GCodeProcessorResult::MoveVertex::LimitingFactor::Prepare :
         GCodeProcessorResult::MoveVertex::LimitingFactor::Requested;
     move.kinematics.has_kinematics = false;
-
-    // Speed modifier tracking: copy data to MoveVertex for extrusions
-    // Only active during slicing (when layer data has been set), not when loading G-code files
-    if (type == EMoveType::Extrude && !m_layer_modifier_data.empty()) {
-        ++m_g1_extrusion_counter;
-        // Look up modifier data from GCode
-        auto it = m_layer_modifier_data.find(m_g1_extrusion_counter);
-        if (it != m_layer_modifier_data.end()) {
-            const G1ModifierData& mod = it->second;
-            move.base_speed = mod.base_speed;
-            move.base_type = mod.base_type;
-            move.speed_modifier_count = std::min(mod.count, static_cast<uint8_t>(GCodeProcessorResult::MoveVertex::MaxSpeedModifiers));
-            for (uint8_t i = 0; i < move.speed_modifier_count; ++i)
-                move.speed_modifiers[i] = mod.modifiers[i];
-        }
-        // Look up cooling modification (sparse - only for slowed lines)
-        auto cool_it = m_layer_cooling_data.find(m_g1_extrusion_counter);
-        if (cool_it != m_layer_cooling_data.end() && move.speed_modifier_count < GCodeProcessorResult::MoveVertex::MaxSpeedModifiers) {
-            const CoolingModification& cool = cool_it->second;
-            // Add LayerTimeCooling modifier at the end
-            SpeedModifierEntry& entry = move.speed_modifiers[move.speed_modifier_count++];
-            entry.type = SpeedModifierEntry::Type::LayerTimeCooling;
-            entry.value = cool.original_feedrate - cool.new_feedrate;
-            entry.speed_after = cool.new_feedrate;
-        }
-    }
 
     if (type == EMoveType::Seam) {
         m_seams_count++;

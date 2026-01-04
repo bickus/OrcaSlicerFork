@@ -102,12 +102,6 @@ struct CoolingLine
     float   time_max;
     // If marked with the "slowdown" flag, the line has been slowed down.
     bool    slowdown;
-    // Speed modifier tracking: first G1 extrusion ID in this segment (0 = not tracked)
-    uint64_t g1_id_start{ 0 };
-    // Speed modifier tracking: number of G1 extrusions in this segment
-    uint16_t g1_count{ 0 };
-    // Speed modifier tracking: original feedrate before slowdown
-    float   original_feedrate{ 0.f };
 };
 
 // Calculate the required per extruder time stretches.
@@ -317,8 +311,7 @@ finished:
 	return new_feedrate;
 }
 
-std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush,
-                                         std::unordered_map<uint64_t, CoolingModification>& cooling_data)
+std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, bool flush)
 {
     // Cache the input G-code.
     if (m_gcode.empty())
@@ -328,14 +321,11 @@ std::string CoolingBuffer::process_layer(std::string &&gcode, size_t layer_id, b
 
     std::string out;
     if (flush) {
-        // Speed modifier tracking: reset counter at start of each layer
-        m_g1_extrusion_counter = 0;
-
         // This is either an object layer or the very last print layer. Calculate cool down over the collected support layers
         // and one object layer.
         std::vector<PerExtruderAdjustments> per_extruder_adjustments = this->parse_layer_gcode(m_gcode, m_current_pos);
         float layer_time_stretched = this->calculate_layer_slowdown(per_extruder_adjustments);
-        out = this->apply_layer_cooldown(m_gcode, layer_id, layer_time_stretched, per_extruder_adjustments, cooling_data);
+        out = this->apply_layer_cooldown(m_gcode, layer_id, layer_time_stretched, per_extruder_adjustments);
         m_gcode.clear();
     }
     return out;
@@ -439,16 +429,11 @@ std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::
             bool adjust_external = true;
             if(adjustment->dont_slow_down_outer_wall && external_perimeter) adjust_external = false;
             
-            // ORCA: Dont slowdown external perimeters for layer time works by not marking the external perimeter as adjustable,
+            // ORCA: Dont slowdown external perimeters for layer time works by not marking the external perimeter as adjustable, 
             // hence the slowdown algorithm ignores it.
             if (boost::contains(sline, ";_EXTRUDE_SET_SPEED") && ! wipe && adjust_external) {
                 line.type |= CoolingLine::TYPE_ADJUSTABLE;
                 active_speed_modifier = adjustment->lines.size();
-                // Speed modifier tracking: this F-only line starts a new segment
-                // Don't count this line - only count actual G1 XYE extrusions
-                // Set g1_id_start to anticipate the first G1 that will follow
-                line.g1_id_start = m_g1_extrusion_counter + 1;
-                line.g1_count = 0;
             }
             if ((line.type & CoolingLine::TYPE_G92) == 0) {
                 //BBS: G0, G1, G2, G3. Calculate the duration.
@@ -479,26 +464,16 @@ std::vector<PerExtruderAdjustments> CoolingBuffer::parse_layer_gcode(const std::
                     line.length = std::abs(dif[3]);
                 }
                 line.feedrate = new_pos[4];
-                // Speed modifier tracking: store original feedrate for adjustable lines
-                if (line.type & CoolingLine::TYPE_ADJUSTABLE)
-                    line.original_feedrate = line.feedrate;
                 assert((line.type & CoolingLine::TYPE_ADJUSTABLE) == 0 || line.feedrate > 0.f);
                 if (line.length > 0)
                     line.time = line.length / line.feedrate;
                 line.time_max = line.time;
                 if ((line.type & CoolingLine::TYPE_ADJUSTABLE) || active_speed_modifier != size_t(-1))
                     line.time_max = (adjustment->slow_down_min_speed == 0.f) ? FLT_MAX : std::max(line.time, line.length / adjustment->slow_down_min_speed);
-                // Speed modifier tracking: count G1/G2/G3 with E > 0 (actual extrusions)
-                // This matches GCodeProcessor which only counts EMoveType::Extrude (requires E > 0)
-                // Must check BEFORE line.type is modified below
-                bool is_g_move = (line.type & CoolingLine::TYPE_G1) ||
-                                 (line.type & CoolingLine::TYPE_G2) ||
-                                 (line.type & CoolingLine::TYPE_G3);
-                if (is_g_move && dif[3] > 0.f)
-                    ++m_g1_extrusion_counter;
-
                 // BBS: add G2 and G3 support
-                if (active_speed_modifier < adjustment->lines.size() && is_g_move) {
+                if (active_speed_modifier < adjustment->lines.size() && ((line.type & CoolingLine::TYPE_G1) ||
+                                                                         (line.type & CoolingLine::TYPE_G2) ||
+                                                                         (line.type & CoolingLine::TYPE_G3))) {
                     // Inside the ";_EXTRUDE_SET_SPEED" blocks, there must not be a G1 Fxx entry.
                     assert((line.type & CoolingLine::TYPE_HAS_F) == 0);
                     CoolingLine &sm = adjustment->lines[active_speed_modifier];
@@ -721,13 +696,11 @@ std::string CoolingBuffer::apply_layer_cooldown(
     // Source G-code for the current layer.
     const std::string                      &gcode,
     // ID of the current layer, used to disable fan for the first n layers.
-    size_t                                  layer_id,
+    size_t                                  layer_id, 
     // Total time of this layer after slow down, used to control the fan.
     float                                   layer_time,
     // Per extruder list of G-code lines and their cool down attributes.
-    std::vector<PerExtruderAdjustments>    &per_extruder_adjustments,
-    // Output: cooling modifications for speed modifier tracking (sparse - only slowed lines)
-    std::unordered_map<uint64_t, CoolingModification>& cooling_data)
+    std::vector<PerExtruderAdjustments>    &per_extruder_adjustments)
 {
     // First sort the adjustment lines by of multiple extruders by their position in the source G-code.
     std::vector<const CoolingLine*> lines;
@@ -944,12 +917,6 @@ std::string CoolingBuffer::apply_layer_cooldown(
             } else if (line->slowdown) {
                 // The F value will be overwritten.
                 modify = true;
-                // Speed modifier tracking: record cooling modifications for all G1s in this segment
-                if (line->g1_id_start > 0 && line->g1_count > 0) {
-                    CoolingModification mod{line->original_feedrate, line->feedrate};
-                    for (uint16_t i = 0; i < line->g1_count; ++i)
-                        cooling_data[line->g1_id_start + i] = mod;
-                }
             } else {
                 // The F value is different from current_feedrate, but not slowed down, thus the G-code line will not be modified.
                 // Emit the line without the comment.
