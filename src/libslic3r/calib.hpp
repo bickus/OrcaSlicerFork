@@ -320,6 +320,12 @@ protected:
         if (width <= 0.) return Flow::auto_extrusion_width(frExternalPerimeter, nozzle_diameter);
         return width;
     };
+    double number_line_width() const
+    {
+        const double nozzle_diameter = m_config.opt_float("nozzle_diameter", 0);
+        // Use 112.5% of nozzle diameter for text, bypassing config override
+        return nozzle_diameter * 1.125;
+    };
     int    wall_count() const { return m_config.option<ConfigOptionInt>("wall_loops")->value; };
 
 private:

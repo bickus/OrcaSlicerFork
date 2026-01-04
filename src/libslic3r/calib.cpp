@@ -634,30 +634,34 @@ CustomGCode::Info CalibPressureAdvancePattern::generate_custom_gcodes(const Dyna
             m_number_len = max_numbering_length();
 
             gcode << m_writer.set_pressure_advance(m_params.start);
+            gcode << ";WIDTH:" << number_line_width() << "\n";
 
-            double number_e_per_mm = e_per_mm(line_width(), height_layer(),
+            double number_e_per_mm = e_per_mm(number_line_width(), height_layer(),
                                               m_config.option<ConfigOptionFloats>("nozzle_diameter")->get_at(0),
                                               m_config.option<ConfigOptionFloats>("filament_diameter")->get_at(0),
                                               m_config.option<ConfigOptionFloats>("filament_flow_ratio")->get_at(0));
 
             // glyph on every other line
             for (int j = 0; j < num_patterns; j += 2) {
-                gcode << draw_number(glyph_start_x(j), m_starting_point.y() + frame_size_y() + m_glyph_padding_vertical + line_width(),
-                                     m_params.start + (j * m_params.step), m_draw_digit_mode, line_width(), number_e_per_mm,
+                gcode << draw_number(glyph_start_x(j), m_starting_point.y() + frame_size_y() + m_glyph_padding_vertical + number_line_width(),
+                                     m_params.start + (j * m_params.step), m_draw_digit_mode, number_line_width(), number_e_per_mm,
                                      speed_first_layer(), m_writer);
             }
 
             // flow value
             int line_num = num_patterns + 2;
-            gcode << draw_number(glyph_start_x(line_num), m_starting_point.y() + frame_size_y() + m_glyph_padding_vertical + line_width(),
-                                 flow_val(), m_draw_digit_mode, line_width(), number_e_per_mm,
+            gcode << draw_number(glyph_start_x(line_num), m_starting_point.y() + frame_size_y() + m_glyph_padding_vertical + number_line_width(),
+                                 flow_val(), m_draw_digit_mode, number_line_width(), number_e_per_mm,
                                  speed_first_layer(), m_writer);
 
             // acceleration
             line_num = num_patterns + 4;
-            gcode << draw_number(glyph_start_x(line_num), m_starting_point.y() + frame_size_y() + m_glyph_padding_vertical + line_width(),
-                                 accel, m_draw_digit_mode, line_width(), number_e_per_mm,
+            gcode << draw_number(glyph_start_x(line_num), m_starting_point.y() + frame_size_y() + m_glyph_padding_vertical + number_line_width(),
+                                 accel, m_draw_digit_mode, number_line_width(), number_e_per_mm,
                                  speed_first_layer(), m_writer);
+
+            // Restore pattern line width after drawing numbers
+            gcode << ";WIDTH:" << line_width() << "\n";
         }
 
 
