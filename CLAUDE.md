@@ -119,11 +119,20 @@ OrcaSlicer is an open-source 3D slicer application forked from Bambu Studio, bui
 
 ### Knowledge Base References
 
-When working on specific areas, read the relevant guide from `docs/dev/` for detailed implementation knowledge:
+When working on specific areas, read the relevant guide from `docs/` for detailed implementation knowledge:
 
 | Area | Document | When to Read |
 |------|----------|--------------|
+| **Features Overview** | [docs/features/README.md](docs/features/README.md) | Understanding OrcaSlicer capabilities, finding feature PRs, or adding new features |
 | Bridging | [docs/dev/bridging.md](docs/dev/bridging.md) | Working on bridge detection, settings, fill, or G-code |
+
+#### Features Documentation
+
+The `docs/features/` directory contains comprehensive documentation of all OrcaSlicer features compiled from release notes (v1.0 - v2.3.1):
+- **~200 features** organized into 17 categories (calibration, infill, walls, seam, motion, etc.)
+- Each feature includes: scale indicator, category, description, version added, and PR links
+- Useful for understanding existing capabilities before implementing changes
+- Reference when adding new settings to ensure consistency with existing patterns
 
 ### Dependencies and Build System
 - **Cross-platform** considerations important for all changes
