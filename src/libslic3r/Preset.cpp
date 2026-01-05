@@ -892,6 +892,8 @@ static std::vector<std::string> s_Preset_machine_limits_options {
     "machine_max_junction_deviation",
     //resonance avoidance ported from qidi slicer
     "resonance_avoidance", "min_resonance_avoidance_speed", "max_resonance_avoidance_speed",
+    // Klipper time estimation
+    "klipper_minimum_cruise_ratio", "klipper_instant_corner_velocity",
 };
 
 static std::vector<std::string> s_Preset_printer_options {

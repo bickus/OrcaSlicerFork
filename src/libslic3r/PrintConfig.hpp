@@ -1144,6 +1144,10 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,                 resonance_avoidance))
     ((ConfigOptionFloat,                min_resonance_avoidance_speed))
     ((ConfigOptionFloat,                max_resonance_avoidance_speed))
+
+    // Klipper-specific time estimation parameters
+    ((ConfigOptionFloat,                klipper_minimum_cruise_ratio))
+    ((ConfigOptionFloat,                klipper_instant_corner_velocity))
 )
 
 // This object is mapped to Perl as Slic3r::Config::GCode.

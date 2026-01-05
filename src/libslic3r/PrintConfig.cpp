@@ -3849,6 +3849,30 @@ void PrintConfigDef::init_fff_params()
     def->mode     = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(120));
 
+    // Klipper-specific time estimation parameters
+    def = this->add("klipper_minimum_cruise_ratio", coFloat);
+    def->label = L("Minimum Cruise Ratio");
+    def->tooltip = L("Klipper minimum cruise ratio for time estimation. "
+                     "This controls the accel_to_decel constraint which affects how much of a move "
+                     "must be at cruise speed. Modern Klipper defaults to 0.5. "
+                     "Set to 0.0 for legacy behavior (no smoothed velocity constraint). "
+                     "Only affects time estimation when G-code flavor is set to Klipper.");
+    def->min = 0.0;
+    def->max = 1.0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0.5));
+
+    def = this->add("klipper_instant_corner_velocity", coFloat);
+    def->label = L("Instant Corner Velocity");
+    def->tooltip = L("Klipper instant corner velocity for extruder direction changes. "
+                     "This limits junction speed when the extruder reverses direction (e.g., at retractions). "
+                     "Typical value is 1.0 mm/s. Only affects time estimation when G-code flavor is set to Klipper.");
+    def->sidetext = "mm/s";
+    def->min = 0.1;
+    def->max = 10.0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(1.0));
+
     def = this->add("fan_max_speed", coFloats);
     def->label = L("Fan speed");
     def->tooltip = L("Part cooling fan speed may be increased when auto cooling is enabled. "
@@ -7090,6 +7114,18 @@ void PrintConfigDef::handle_legacy_composite(DynamicPrintConfig &config)
 
             config.set_key_value("thumbnails", new ConfigOptionString(thumbnails_str));
         }
+    }
+
+    // Klipper time estimation settings - add defaults for legacy projects
+    if (!config.has("klipper_minimum_cruise_ratio")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("klipper_minimum_cruise_ratio");
+        if (default_opt != nullptr)
+            config.set_key_value("klipper_minimum_cruise_ratio", default_opt->clone());
+    }
+    if (!config.has("klipper_instant_corner_velocity")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("klipper_instant_corner_velocity");
+        if (default_opt != nullptr)
+            config.set_key_value("klipper_instant_corner_velocity", default_opt->clone());
     }
 
     if (config.has("wiping_volumes_matrix") && !config.has("wiping_volumes_use_custom_matrix")) {

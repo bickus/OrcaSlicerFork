@@ -733,6 +733,16 @@ class Print;
         float m_preheat_time;
         int m_preheat_steps;
         bool m_disable_m73;
+
+        // Klipper-specific time estimation parameters
+        float m_junction_deviation = 0.04f;       // Default from SCV ~5mm/s at 3000 accel
+        float m_accel_to_decel = 0.0f;            // Calculated from cruise_ratio or G-code
+        float m_instant_corner_velocity = 1.0f;   // Klipper default mm/s for extruder
+        float m_cruise_ratio = 0.5f;              // Modern Klipper default
+        bool m_accel_to_decel_from_gcode = false; // Track if value came from G-code
+        float m_prev_block_distance = 0.0f;       // Previous block distance for centripetal constraint
+        float m_prev_e_feedrate = 0.0f;           // For extruder reversal detection
+
 #if ENABLE_GCODE_VIEWER_STATISTICS
         std::chrono::time_point<std::chrono::high_resolution_clock> m_start_time;
 #endif // ENABLE_GCODE_VIEWER_STATISTICS
@@ -980,6 +990,7 @@ class Print;
         float get_axis_max_acceleration(PrintEstimatedStatistics::ETimeMode mode, Axis axis) const;
         float get_axis_max_jerk(PrintEstimatedStatistics::ETimeMode mode, Axis axis) const;
         Vec3f get_xyz_max_jerk(PrintEstimatedStatistics::ETimeMode mode) const;
+        bool is_klipper_flavor() const;
         float get_retract_acceleration(PrintEstimatedStatistics::ETimeMode mode) const;
         void  set_retract_acceleration(PrintEstimatedStatistics::ETimeMode mode, float value);
     float get_acceleration(PrintEstimatedStatistics::ETimeMode mode) const;
