@@ -16,6 +16,7 @@ Bridge detection, flow control, and enhancement features for spanning gaps.
 | Internal Bridging Control | medium | Bridging/Internal | Option to control the amount of internal bridging, fixing missing bridges on sloped surfaces. | v2.0.0-beta | - | [#3319](https://github.com/SoftFever/OrcaSlicer/pull/3319) |
 | Bridge Anchor Fix | small | Bridging/Anchoring | Fixed bridge anchoring when bridge is also a top surface. | v2.2.0-beta | - | [#6654](https://github.com/SoftFever/OrcaSlicer/pull/6654) |
 | Auto Internal Bridge Infill Direction | small | Bridging/Fill | Automatic determination of optimal bridge infill direction based on geometry. | v2.3.1-alpha | v2.3.1-beta | - |
+| Extra Bridge Settings | medium | Bridging/Extra | Adds 7 separate settings for extra bridge layers (second layer over bridges): speed, acceleration, jerk, flow, density, line width, and wall overlap. When set to 0, each setting falls back to context-appropriate regular bridge setting. | Швидкосрал | - | - |
 
 ## Bridge Detection
 
@@ -49,6 +50,22 @@ OrcaSlicer automatically detects areas that span gaps between supports, identify
 - Ported from SuperSlicer
 - Improved bridging performance in counterbore holes
 - Better handling of similar geometries
+
+## Extra Bridge Settings (Швидкосрал)
+
+Extra bridge layers are the second layer printed over bridges, providing additional reinforcement. These settings allow fine-tuning extra bridges independently:
+
+| Setting | Location | Fallback Behavior |
+|---------|----------|-------------------|
+| Extra Bridge Speed | Speed -> Bridge | External extra bridges use bridge speed, internal use internal bridge speed |
+| Extra Bridge Acceleration | Speed -> Acceleration | External extra bridges use bridge acceleration, internal use internal bridge acceleration |
+| Extra Bridge Jerk | Speed -> Jerk(XY) | External extra bridges use bridge jerk, internal use internal bridge jerk |
+| Extra Bridge Flow | Quality -> Bridging | External extra bridges use bridge flow, internal use internal bridge flow |
+| Extra Bridge Density | Quality -> Bridging | External extra bridges use bridge density, internal use internal bridge density |
+| Extra Bridge Line Width | Quality -> Line Width | External extra bridges use bridge line width, internal use internal bridge line width |
+| Extra Bridge Wall Overlap | Strength -> Infill | Falls back to bridge infill/wall overlap |
+
+All settings default to 0, which triggers the fallback behavior.
 
 ## Notes
 

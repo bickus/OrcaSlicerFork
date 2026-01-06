@@ -2131,6 +2131,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("internal_solid_infill_line_width","quality_settings_line_width");
         optgroup->append_single_option_line("bridge_infill_line_width","quality_settings_line_width");
         optgroup->append_single_option_line("internal_bridge_infill_line_width","quality_settings_line_width");
+        optgroup->append_single_option_line("extra_bridge_infill_line_width","quality_settings_line_width");
         optgroup->append_single_option_line("support_line_width","quality_settings_line_width");
 
         optgroup = page->new_optgroup(L("Seam"), L"param_seam");
@@ -2210,8 +2211,10 @@ void TabPrint::build()
         optgroup = page->new_optgroup(L("Bridging"), L"param_bridge");
         optgroup->append_single_option_line("bridge_flow", "quality_settings_bridging#flow-ratio");
 	    optgroup->append_single_option_line("internal_bridge_flow", "quality_settings_bridging#flow-ratio");
+        optgroup->append_single_option_line("extra_bridge_flow", "quality_settings_bridging#flow-ratio");
         optgroup->append_single_option_line("bridge_density", "quality_settings_bridging#bridge-density");
         optgroup->append_single_option_line("internal_bridge_density", "quality_settings_bridging#bridge-density");
+        optgroup->append_single_option_line("extra_bridge_density", "quality_settings_bridging#bridge-density");
         optgroup->append_single_option_line("thick_bridges", "quality_settings_bridging#thick-bridges");
         optgroup->append_single_option_line("thick_internal_bridges", "quality_settings_bridging#thick-bridges");
         optgroup->append_single_option_line("enable_extra_bridge_layer", "quality_settings_bridging#extra-bridge-layers");
@@ -2274,6 +2277,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("filter_out_gap_fill", "strength_settings_infill#filter-out-tiny-gaps");
         optgroup->append_single_option_line("infill_wall_overlap", "strength_settings_infill#infill-wall-overlap");
         optgroup->append_single_option_line("bridge_infill_wall_overlap", "strength_settings_infill#bridge-infill-wall-overlap");
+        optgroup->append_single_option_line("extra_bridge_infill_wall_overlap", "strength_settings_infill#extra-bridge-infill-wall-overlap");
 
         optgroup = page->new_optgroup(L("Advanced"), L"param_advanced");
         optgroup->append_single_option_line("align_infill_direction_to_model", "strength_settings_advanced#align-infill-direction-to-model");
@@ -2316,9 +2320,10 @@ void TabPrint::build()
         line.append_option(optgroup->get_option("overhang_4_4_speed"));
         optgroup->append_line(line);
         optgroup->append_separator();
-        line = { L("Bridge"), L("Set speed for external and internal bridges") };
+        line = { L("Bridge"), L("Set speed for external, internal, and extra bridges") };
         line.append_option(optgroup->get_option("bridge_speed"));
         line.append_option(optgroup->get_option("internal_bridge_speed"));
+        line.append_option(optgroup->get_option("extra_bridge_speed"));
         optgroup->append_line(line);
 
         optgroup = page->new_optgroup(L("Travel speed"), L"param_travel_speed", 15);
@@ -2330,6 +2335,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("inner_wall_acceleration", "speed_settings_acceleration#inner-wall");
         optgroup->append_single_option_line("bridge_acceleration", "speed_settings_acceleration#external-bridge");
         optgroup->append_single_option_line("internal_bridge_acceleration", "speed_settings_acceleration#internal-bridge");
+        optgroup->append_single_option_line("extra_bridge_acceleration", "speed_settings_acceleration#extra-bridge");
         optgroup->append_single_option_line("sparse_infill_acceleration", "speed_settings_acceleration#sparse-infill");
         optgroup->append_single_option_line("internal_solid_infill_acceleration", "speed_settings_acceleration#internal-solid-infill");
         optgroup->append_single_option_line("initial_layer_acceleration", "speed_settings_acceleration#initial-layer");
@@ -2346,6 +2352,7 @@ void TabPrint::build()
         optgroup->append_single_option_line("infill_jerk", "speed_settings_jerk_xy#infill");
         optgroup->append_single_option_line("bridge_jerk", "speed_settings_jerk_xy#external-bridge");
         optgroup->append_single_option_line("internal_bridge_jerk", "speed_settings_jerk_xy#internal-bridge");
+        optgroup->append_single_option_line("extra_bridge_jerk", "speed_settings_jerk_xy#extra-bridge");
         optgroup->append_single_option_line("top_surface_jerk", "speed_settings_jerk_xy#top-surface");
         optgroup->append_single_option_line("initial_layer_jerk", "speed_settings_jerk_xy#initial-layer");
         optgroup->append_single_option_line("travel_jerk", "speed_settings_jerk_xy#travel");

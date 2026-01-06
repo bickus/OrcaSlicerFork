@@ -1041,6 +1041,17 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionPercent(100));
 
+    def = this->add("extra_bridge_density", coPercent);
+    def->label = L("Extra bridge density");
+    def->category = L("Strength");
+    def->tooltip = L("Controls the density (spacing) of extra bridge layers (second layer over bridges). Set to 0 to use the corresponding bridge density: "
+                     "external extra bridges use bridge density, internal extra bridges use internal bridge density.");
+    def->sidetext = "%";
+    def->min = 0;
+    def->max = 180;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionPercent(0));
+
     def = this->add("bridge_flow", coFloat);
     def->label = L("Bridge flow ratio");
     def->category = L("Quality");
@@ -1060,6 +1071,16 @@ void PrintConfigDef::init_fff_params()
     def->max = 2.0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(1));
+
+    def = this->add("extra_bridge_flow", coFloat);
+    def->label = L("Extra bridge flow ratio");
+    def->category = L("Quality");
+    def->tooltip = L("Flow ratio for extra bridge layers (second layer over bridges). Set to 0 to use the corresponding bridge flow ratio: "
+                     "external extra bridges use bridge flow ratio, internal extra bridges use internal bridge flow ratio.");
+    def->min = 0;
+    def->max = 2.0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
 
     def = this->add("top_solid_infill_flow_ratio", coFloat);
     def->label = L("Top surface flow ratio");
@@ -1282,6 +1303,16 @@ void PrintConfigDef::init_fff_params()
     def->min = 1;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloatOrPercent(150, true));
+
+    def = this->add("extra_bridge_speed", coFloat);
+    def->label = L("Extra bridge");
+    def->category = L("Speed");
+    def->tooltip = L("Speed of extra bridge layers (second layer over bridges). Set to 0 to use the corresponding bridge speed: "
+                     "external extra bridges use bridge speed, internal extra bridges use internal bridge speed.");
+    def->sidetext = "mm/s";
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
 
     def = this->add("brim_width", coFloat);
     def->label = L("Brim width");
@@ -2627,6 +2658,15 @@ void PrintConfigDef::init_fff_params()
     def->ratio_over = "outer_wall_acceleration";
     def->set_default_value(new ConfigOptionFloatOrPercent(0,false));
 
+    def = this->add("extra_bridge_acceleration", coFloat);
+    def->label = L("Extra bridge");
+    def->tooltip = L("Acceleration of extra bridge layers (second layer over bridges). Set to 0 to use the corresponding bridge acceleration: "
+                     "external extra bridges use bridge acceleration, internal extra bridges use internal bridge acceleration.");
+    def->sidetext = L("mm/s²");
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
+
     def = this->add("sparse_infill_acceleration", coFloatOrPercent);
     def->label = L("Sparse infill");
     def->tooltip = L("Acceleration of sparse infill. If the value is expressed as a percentage (e.g. 100%), it will be calculated based on the default acceleration.");
@@ -2728,6 +2768,15 @@ void PrintConfigDef::init_fff_params()
     def->label = L("Internal bridge");
     def->tooltip = L("Jerk for internal bridges. Leave at 0 to reuse the Solid infill jerk value.");
     def->sidetext = "mm/s";	// milimeters per second, don't need translation
+    def->min = 0;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
+
+    def = this->add("extra_bridge_jerk", coFloat);
+    def->label = L("Extra bridge");
+    def->tooltip = L("Jerk for extra bridge layers (second layer over bridges). Set to 0 to use the corresponding bridge jerk: "
+                     "external extra bridges use bridge jerk, internal extra bridges use internal bridge jerk.");
+    def->sidetext = "mm/s";
     def->min = 0;
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionFloat(0));
@@ -3420,6 +3469,18 @@ void PrintConfigDef::init_fff_params()
                      "Set to 0 to use the original algorithm with Infill/Wall overlap value. "
                      "When set to non-zero, a different algorithm is used which may produce slightly different results "
                      "for values above 40-50% - please validate the generated G-code for your specific use case.");
+    def->sidetext = "%";
+    def->min = 0;
+    def->max = 100;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionPercent(0));
+
+    def = this->add("extra_bridge_infill_wall_overlap", coPercent);
+    def->label = L("Extra bridge infill/wall overlap");
+    def->category = L("Strength");
+    // xgettext:no-c-format, no-boost-format
+    def->tooltip = L("Extra bridge infill area overlap with wall (for second layer over bridges). "
+                     "Set to 0 to use the bridge infill/wall overlap value.");
     def->sidetext = "%";
     def->min = 0;
     def->max = 100;
@@ -4808,6 +4869,19 @@ void PrintConfigDef::init_fff_params()
     def->label = L("Internal bridge infill");
     def->category = L("Quality");
     def->tooltip = L("Line width of internal bridge infill. If expressed as a %, it will be computed over the nozzle diameter. A value of 0 reuses the internal solid infill width.");
+    def->sidetext = L("mm or %");
+    def->ratio_over = "nozzle_diameter";
+    def->min = 0;
+    def->max = 1000;
+    def->max_literal = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloatOrPercent(0., false));
+
+    def = this->add("extra_bridge_infill_line_width", coFloatOrPercent);
+    def->label = L("Extra bridge infill");
+    def->category = L("Quality");
+    def->tooltip = L("Line width of extra bridge infill (second layer over bridges). If expressed as a %, it will be computed over the nozzle diameter. "
+                     "Set to 0 to use the corresponding bridge line width: external extra bridges use bridge infill line width, internal extra bridges use internal bridge infill line width.");
     def->sidetext = L("mm or %");
     def->ratio_over = "nozzle_diameter";
     def->min = 0;
@@ -7086,6 +7160,48 @@ void PrintConfigDef::handle_legacy_composite(DynamicPrintConfig &config)
         const ConfigOption *default_opt = FullPrintConfig::defaults().option("seam_to_overhang_distance");
         if (default_opt != nullptr)
             config.set_key_value("seam_to_overhang_distance", default_opt->clone());
+    }
+
+    if (!config.has("extra_bridge_speed")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("extra_bridge_speed");
+        if (default_opt != nullptr)
+            config.set_key_value("extra_bridge_speed", default_opt->clone());
+    }
+
+    if (!config.has("extra_bridge_acceleration")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("extra_bridge_acceleration");
+        if (default_opt != nullptr)
+            config.set_key_value("extra_bridge_acceleration", default_opt->clone());
+    }
+
+    if (!config.has("extra_bridge_jerk")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("extra_bridge_jerk");
+        if (default_opt != nullptr)
+            config.set_key_value("extra_bridge_jerk", default_opt->clone());
+    }
+
+    if (!config.has("extra_bridge_flow")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("extra_bridge_flow");
+        if (default_opt != nullptr)
+            config.set_key_value("extra_bridge_flow", default_opt->clone());
+    }
+
+    if (!config.has("extra_bridge_density")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("extra_bridge_density");
+        if (default_opt != nullptr)
+            config.set_key_value("extra_bridge_density", default_opt->clone());
+    }
+
+    if (!config.has("extra_bridge_infill_line_width")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("extra_bridge_infill_line_width");
+        if (default_opt != nullptr)
+            config.set_key_value("extra_bridge_infill_line_width", default_opt->clone());
+    }
+
+    if (!config.has("extra_bridge_infill_wall_overlap")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("extra_bridge_infill_wall_overlap");
+        if (default_opt != nullptr)
+            config.set_key_value("extra_bridge_infill_wall_overlap", default_opt->clone());
     }
 
     if (config.has("thumbnails")) {

@@ -836,8 +836,17 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
         if (!is_thick_bridge && (extrusion_role_id == erBridgeInfill || extrusion_role_id == erInternalBridgeInfill ||
                                   extrusion_role_id == erExtraBridgeInfill || extrusion_role_id == erExtraInternalBridgeInfill)) {
             const PrintRegionConfig &region_config = layerm.region().config();
-            const ConfigOptionFloatOrPercent *width_opt =
-                (extrusion_role_id == erBridgeInfill || extrusion_role_id == erExtraBridgeInfill) ? &region_config.bridge_infill_line_width : &region_config.internal_bridge_infill_line_width;
+            const ConfigOptionFloatOrPercent *width_opt = nullptr;
+            // Extra bridges use extra_bridge_infill_line_width if set, else fall back to context-appropriate width
+            if (extrusion_role_id == erExtraBridgeInfill || extrusion_role_id == erExtraInternalBridgeInfill) {
+                width_opt = &region_config.extra_bridge_infill_line_width;
+                if (!width_opt->percent && width_opt->value == 0.) {
+                    // Fallback: external extra bridges use bridge_infill_line_width, internal use internal_bridge_infill_line_width
+                    width_opt = (extrusion_role_id == erExtraBridgeInfill) ? &region_config.bridge_infill_line_width : &region_config.internal_bridge_infill_line_width;
+                }
+            } else {
+                width_opt = (extrusion_role_id == erBridgeInfill) ? &region_config.bridge_infill_line_width : &region_config.internal_bridge_infill_line_width;
+            }
             if (!width_opt->percent && width_opt->value == 0.)
                 width_opt = &region_config.internal_solid_infill_line_width;
             const PrintConfig &print_config = layer.object()->print()->config();
@@ -1057,7 +1066,11 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 		    fill.params.extrusion_role == erExtraBridgeInfill || fill.params.extrusion_role == erExtraInternalBridgeInfill) {
 			const LayerRegion &layerm = *layer.regions()[fill.region_id];
 			const PrintRegionConfig &region_config = layerm.region().config();
-			double bridge_overlap_pct = region_config.bridge_infill_wall_overlap.value;
+			bool is_extra_bridge = (fill.params.extrusion_role == erExtraBridgeInfill || fill.params.extrusion_role == erExtraInternalBridgeInfill);
+
+			// For extra bridges, use extra_bridge_infill_wall_overlap if set, else fall back to bridge_infill_wall_overlap
+			double bridge_overlap_pct = is_extra_bridge && region_config.extra_bridge_infill_wall_overlap.value > 0 ?
+				region_config.extra_bridge_infill_wall_overlap.value : region_config.bridge_infill_wall_overlap.value;
 
 			// Only apply bridge-specific overlap when explicitly set (non-zero)
 			// When 0, the original infill_wall_overlap is used through the standard algorithm
@@ -1069,12 +1082,23 @@ std::vector<SurfaceFill> group_fills(const Layer &layer, LockRegionParam &lock_p
 				// Get the appropriate bridge line width based on extrusion role
 				// Bridge overlap percentage is relative to the bridge infill line width
 				double bridge_line_width;
-				if (fill.params.extrusion_role == erBridgeInfill || fill.params.extrusion_role == erExtraBridgeInfill) {
+				if (is_extra_bridge) {
+					// Extra bridges: use extra_bridge_infill_line_width if set, else fall back to context-appropriate
+					bridge_line_width = region_config.extra_bridge_infill_line_width.get_abs_value(nozzle_diameter);
+					if (bridge_line_width == 0) {
+						// Fallback: external extra bridges use bridge_infill_line_width, internal use internal_bridge_infill_line_width
+						bridge_line_width = (fill.params.extrusion_role == erExtraBridgeInfill) ?
+							region_config.bridge_infill_line_width.get_abs_value(nozzle_diameter) :
+							region_config.internal_bridge_infill_line_width.get_abs_value(nozzle_diameter);
+					}
+					if (bridge_line_width == 0)
+						bridge_line_width = region_config.internal_solid_infill_line_width.get_abs_value(nozzle_diameter);
+				} else if (fill.params.extrusion_role == erBridgeInfill) {
 					bridge_line_width = region_config.bridge_infill_line_width.get_abs_value(nozzle_diameter);
 					// If 0, falls back to internal solid infill width
 					if (bridge_line_width == 0)
 						bridge_line_width = region_config.internal_solid_infill_line_width.get_abs_value(nozzle_diameter);
-				} else { // erInternalBridgeInfill or erExtraInternalBridgeInfill
+				} else { // erInternalBridgeInfill
 					bridge_line_width = region_config.internal_bridge_infill_line_width.get_abs_value(nozzle_diameter);
 					// If 0, falls back to internal solid infill width
 					if (bridge_line_width == 0)
@@ -1368,7 +1392,20 @@ void Layer::make_fills(FillAdaptive::Octree* adaptive_fill_octree, FillAdaptive:
 				params.density = layerm->region().config().bridge_density.get_abs_value(1.0);
 				params.dont_adjust = true;
 			}
-            if(surface_fill.surface.is_internal_bridge()){
+            // Extra bridges (second layer over bridges)
+            if(surface_fill.surface.is_extra_bridge()){
+                double extra_density = f->print_object_config->extra_bridge_density.get_abs_value(1.0);
+                if(extra_density > 0.0){
+                    params.density = extra_density;
+                } else {
+                    // Fallback: external extra bridges use bridge_density, internal extra bridges use internal_bridge_density
+                    if(surface_fill.surface.surface_type == stInternalAfterExternalBridge)
+                        params.density = layerm->region().config().bridge_density.get_abs_value(1.0);
+                    else // stSecondInternalBridge
+                        params.density = f->print_object_config->internal_bridge_density.get_abs_value(1.0);
+                }
+                params.dont_adjust = true;
+            } else if(surface_fill.surface.is_internal_bridge()){
                 params.density = f->print_object_config->internal_bridge_density.get_abs_value(1.0);
                 params.dont_adjust = true;
             }

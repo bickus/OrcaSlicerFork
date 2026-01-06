@@ -5340,9 +5340,16 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             double bridge_acc = 0.0;
             if (is_bridge(path.role())) {
                 const double external_bridge_acc = m_config.get_abs_value("bridge_acceleration");
-                if (path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill) {
+                const double extra_bridge_acc = m_config.extra_bridge_acceleration.value;
+                if (path.role() == erExtraInternalBridgeInfill) {
+                    const double internal_bridge_acc = m_config.get_abs_value("internal_bridge_acceleration");
+                    double fallback_acc = internal_bridge_acc > 0.0 ? internal_bridge_acc : external_bridge_acc;
+                    bridge_acc = extra_bridge_acc > 0.0 ? extra_bridge_acc : fallback_acc;
+                } else if (path.role() == erInternalBridgeInfill) {
                     const double internal_bridge_acc = m_config.get_abs_value("internal_bridge_acceleration");
                     bridge_acc = internal_bridge_acc > 0.0 ? internal_bridge_acc : external_bridge_acc;
+                } else if (path.role() == erExtraBridgeInfill) {
+                    bridge_acc = extra_bridge_acc > 0.0 ? extra_bridge_acc : external_bridge_acc;
                 } else {
                     bridge_acc = external_bridge_acc;
                 }
@@ -5374,8 +5381,15 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         } else {
             double bridge_jerk = 0.0;
             if (is_bridge(path.role())) {
-                if (path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill) {
+                const double extra_jerk = m_config.extra_bridge_jerk.value;
+                if (path.role() == erExtraInternalBridgeInfill) {
+                    double fallback_jerk = (m_config.internal_bridge_jerk.value > 0.0) ? m_config.internal_bridge_jerk.value : m_config.infill_jerk.value;
+                    bridge_jerk = (extra_jerk > 0.0) ? extra_jerk : fallback_jerk;
+                } else if (path.role() == erInternalBridgeInfill) {
                     bridge_jerk = (m_config.internal_bridge_jerk.value > 0.0) ? m_config.internal_bridge_jerk.value : m_config.infill_jerk.value;
+                } else if (path.role() == erExtraBridgeInfill) {
+                    double fallback_jerk = (m_config.bridge_jerk.value > 0.0) ? m_config.bridge_jerk.value : m_config.infill_jerk.value;
+                    bridge_jerk = (extra_jerk > 0.0) ? extra_jerk : fallback_jerk;
                 } else {
                     bridge_jerk = (m_config.bridge_jerk.value > 0.0) ? m_config.bridge_jerk.value : m_config.infill_jerk.value;
                 }
@@ -5415,8 +5429,18 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
         _mm3_per_mm *= m_config.top_solid_infill_flow_ratio;
     else if (path.role() == erBottomSurface)
         _mm3_per_mm *= m_config.bottom_solid_infill_flow_ratio;
-    else if (path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill)
+    else if (path.role() == erExtraInternalBridgeInfill) {
+        double extra_flow = m_config.extra_bridge_flow.value;
+        _mm3_per_mm *= (extra_flow > 0.0) ? extra_flow : m_config.internal_bridge_flow;
+    } else if (path.role() == erInternalBridgeInfill)
         _mm3_per_mm *= m_config.internal_bridge_flow;
+    else if (path.role() == erExtraBridgeInfill) {
+        // External extra bridges - apply flow ratio if extra_bridge_flow is set
+        double extra_flow = m_config.extra_bridge_flow.value;
+        if (extra_flow > 0.0)
+            _mm3_per_mm *= extra_flow;
+        // Note: regular bridge_flow is applied through bridging_flow() in LayerRegion.cpp
+    }
     else if(sloped)
         _mm3_per_mm *= m_config.scarf_joint_flow_ratio;
     // Effective extrusion length per distance unit = (filament_flow_ratio/cross_section) * mm3_per_mm / print flow ratio
@@ -5439,9 +5463,15 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                 speed = std::min(speed, m_config.scarf_joint_speed.get_abs_value(m_config.get_abs_value("outer_wall_speed")));
             }
         } 
-        else if(path.role() == erInternalBridgeInfill || path.role() == erExtraInternalBridgeInfill) {
+        else if(path.role() == erExtraInternalBridgeInfill) {
+            double extra_speed = m_config.extra_bridge_speed.value;
+            speed = extra_speed > 0 ? extra_speed : m_config.get_abs_value("internal_bridge_speed");
+        } else if(path.role() == erInternalBridgeInfill) {
             speed = m_config.get_abs_value("internal_bridge_speed");
-        } else if (path.role() == erOverhangPerimeter || path.role() == erSupportTransition || path.role() == erBridgeInfill || path.role() == erExtraBridgeInfill) {
+        } else if(path.role() == erExtraBridgeInfill) {
+            double extra_speed = m_config.extra_bridge_speed.value;
+            speed = extra_speed > 0 ? extra_speed : m_config.get_abs_value("bridge_speed");
+        } else if (path.role() == erOverhangPerimeter || path.role() == erSupportTransition || path.role() == erBridgeInfill) {
             speed = m_config.get_abs_value("bridge_speed");
         } else if (path.role() == erInternalInfill) {
             speed = m_config.get_abs_value("sparse_infill_speed");

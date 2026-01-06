@@ -873,6 +873,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     // Orca
     ((ConfigOptionEnum<EnableExtraBridgeLayer>,  enable_extra_bridge_layer))
     ((ConfigOptionPercent,              internal_bridge_density))
+    ((ConfigOptionPercent,              extra_bridge_density))
     ((ConfigOptionBool,                bridge_infill_at_end))
     // Overhang angle threshold.
     ((ConfigOptionInt,                 support_threshold_angle))
@@ -930,6 +931,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,              initial_layer_acceleration))
     ((ConfigOptionFloatOrPercent,     bridge_acceleration))
     ((ConfigOptionFloatOrPercent,     internal_bridge_acceleration))
+    ((ConfigOptionFloat,              extra_bridge_acceleration))
     ((ConfigOptionFloat,              travel_acceleration))
     ((ConfigOptionFloat,              bridge_travel_acceleration))
     ((ConfigOptionFloatOrPercent,     sparse_infill_acceleration))
@@ -941,6 +943,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,              infill_jerk))
     ((ConfigOptionFloat,              bridge_jerk))
     ((ConfigOptionFloat,              internal_bridge_jerk))
+    ((ConfigOptionFloat,              extra_bridge_jerk))
     ((ConfigOptionFloat,              top_surface_jerk))
     ((ConfigOptionFloat,              initial_layer_jerk))
     ((ConfigOptionFloat,              travel_jerk))
@@ -971,8 +974,10 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,                internal_bridge_angle)) // ORCA: Internal bridge angle override
     ((ConfigOptionFloat,                bridge_flow))
     ((ConfigOptionFloat,                internal_bridge_flow))
+    ((ConfigOptionFloat,                extra_bridge_flow))
     ((ConfigOptionFloat,                bridge_speed))
     ((ConfigOptionFloatOrPercent,       internal_bridge_speed))
+    ((ConfigOptionFloat,                extra_bridge_speed))
     ((ConfigOptionEnum<EnsureVerticalShellThickness>,   ensure_vertical_shell_thickness))
     ((ConfigOptionPercent,              top_surface_density))
     ((ConfigOptionPercent,               bottom_surface_density))
@@ -1009,6 +1014,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionPercent,              infill_wall_overlap))
     ((ConfigOptionPercent,              top_bottom_infill_wall_overlap))
     ((ConfigOptionPercent,              bridge_infill_wall_overlap))
+    ((ConfigOptionPercent,              extra_bridge_infill_wall_overlap))
     ((ConfigOptionFloat,                sparse_infill_speed))
     ((ConfigOptionPercent, skeleton_infill_density))
     ((ConfigOptionPercent, skin_infill_density))
@@ -1042,6 +1048,7 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatOrPercent, internal_solid_infill_line_width))
     ((ConfigOptionFloatOrPercent, bridge_infill_line_width))
     ((ConfigOptionFloatOrPercent, internal_bridge_infill_line_width))
+    ((ConfigOptionFloatOrPercent, extra_bridge_infill_line_width))
     ((ConfigOptionFloat, internal_solid_infill_speed))
     // Detect thin walls.
     ((ConfigOptionBool, detect_thin_wall))
