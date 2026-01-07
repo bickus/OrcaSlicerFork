@@ -4,6 +4,7 @@
 #include "../GCode/ThumbnailData.hpp"
 #include "libslic3r/ProjectTask.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/Slicing.hpp"
 #include <functional>
 
 namespace Slic3r {
@@ -89,6 +90,7 @@ struct PlateData
     std::vector<FilamentInfo> slice_filaments_info;
     std::vector<size_t> skipped_objects;
     DynamicPrintConfig config;
+    t_layer_config_ranges layer_config_ranges;  // Plate-level height modifiers
     bool            is_support_used {false};
     bool            is_sliced_valid = false;
     bool            toolpath_outside {false};

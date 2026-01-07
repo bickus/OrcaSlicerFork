@@ -3681,6 +3681,10 @@ int PartPlateList::duplicate_plate(int index)
         }
     }
     new_plate->translate_all_instance(plate_to_plate_offset);
+
+    // Copy plate-level settings
+    new_plate->layer_config_ranges() = old_plate->layer_config_ranges();
+
     // update the plates
     wxGetApp().obj_list()->reload_all_plates();
     return new_plate_index;
@@ -5262,6 +5266,7 @@ int PartPlateList::store_to_3mf_structure(PlateDataPtrs& plate_data_list, bool w
 		BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(": plate %1% after load, width %2%, height %3%, size %4%!")
 			%(i+1) %plate_data_item->plate_thumbnail.width %plate_data_item->plate_thumbnail.height %plate_data_item->plate_thumbnail.pixels.size();
 		plate_data_item->config.apply(*m_plate_list[i]->config());
+		plate_data_item->layer_config_ranges = m_plate_list[i]->layer_config_ranges();
 
 		if (m_plate_list[i]->no_light_thumbnail_data.is_valid())
 			plate_data_item->no_light_thumbnail_file = "valid_no_light";
@@ -5339,6 +5344,7 @@ int PartPlateList::load_from_3mf_structure(PlateDataPtrs& plate_data_list)
 		int index = create_plate(false);
 		m_plate_list[index]->m_locked = plate_data_list[i]->locked;
 		m_plate_list[index]->config()->apply(plate_data_list[i]->config);
+		m_plate_list[index]->layer_config_ranges() = plate_data_list[i]->layer_config_ranges;
 		m_plate_list[index]->set_plate_name(plate_data_list[i]->plate_name);
 		if (plate_data_list[i]->plate_index != index)
 		{

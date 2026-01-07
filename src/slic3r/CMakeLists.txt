@@ -202,6 +202,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/GUI_ObjectTable.hpp
     GUI/GUI_ObjectTableSettings.cpp
     GUI/GUI_ObjectTableSettings.hpp
+    GUI/GUI_PlateHeightRanges.cpp
+    GUI/GUI_PlateHeightRanges.hpp
     GUI/GUI_Preview.cpp
     GUI/GUI_Preview.hpp
     GUI/GUI_Utils.cpp

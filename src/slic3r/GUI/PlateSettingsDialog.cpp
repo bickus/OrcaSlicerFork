@@ -1,6 +1,7 @@
 #include "PlateSettingsDialog.hpp"
 #include "MsgDialog.hpp"
 #include "Widgets/DialogButtons.hpp"
+#include "GUI_PlateHeightRanges.hpp"
 
 namespace Slic3r { namespace GUI {
 static constexpr int MIN_LAYER_VALUE = 2;
@@ -456,6 +457,16 @@ PlateSettingsDialog::PlateSettingsDialog(wxWindow* parent, const wxString& title
     m_sizer_main->AddSpacer(FromDIP(5));
     m_sizer_main->Add(m_other_layers_seq_panel, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(30));
 
+    // Height range modifiers panel
+    m_sizer_main->AddSpacer(FromDIP(10));
+    auto* height_ranges_line = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(-1, 1));
+    height_ranges_line->SetBackgroundColour(wxColour(220, 220, 220));
+    m_sizer_main->Add(height_ranges_line, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(30));
+    m_sizer_main->AddSpacer(FromDIP(10));
+
+    m_height_ranges_panel = new PlateHeightRangesPanel(this);
+    m_sizer_main->Add(m_height_ranges_panel, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(30));
+
     auto dlg_btns = new DialogButtons(this, {"OK", "Cancel"});
 
     dlg_btns->GetOK()->Bind(wxEVT_BUTTON, [this](auto& e) {
@@ -604,6 +615,26 @@ void PlateSettingsDialog::set_plate_name(const wxString &name) { m_ti_plate_name
 std::vector<int> PlateSettingsDialog::get_first_layer_print_seq()
 {
     return m_drag_canvas->get_shape_list_order();
+}
+
+void PlateSettingsDialog::sync_height_ranges(const t_layer_config_ranges& ranges)
+{
+    if (m_height_ranges_panel)
+        m_height_ranges_panel->sync_ranges(ranges);
+}
+
+t_layer_config_ranges PlateSettingsDialog::get_height_ranges() const
+{
+    if (m_height_ranges_panel)
+        return m_height_ranges_panel->get_ranges();
+    return t_layer_config_ranges();
+}
+
+bool PlateSettingsDialog::has_height_ranges() const
+{
+    if (m_height_ranges_panel)
+        return m_height_ranges_panel->has_ranges();
+    return false;
 }
 
 

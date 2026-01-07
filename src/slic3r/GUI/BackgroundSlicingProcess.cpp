@@ -717,6 +717,13 @@ Print::ApplyStatus BackgroundSlicingProcess::apply(const Model &model, const Dyn
 	// TODO: add partplate config
 	DynamicPrintConfig new_config = config;
 	new_config.apply(*m_current_plate->config());
+
+	// Pass plate layer config ranges to Print (for plate-level height modifiers)
+	if (m_print->technology() == ptFFF) {
+		static_cast<Print*>(m_print)->set_plate_layer_config_ranges(
+			m_current_plate->layer_config_ranges());
+	}
+
 	Print::ApplyStatus invalidated = m_print->apply(model, new_config);
 
 	// Orca: prevent resetting under gcode viewer mode

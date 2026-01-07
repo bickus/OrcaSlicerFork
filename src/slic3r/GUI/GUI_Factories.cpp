@@ -1543,6 +1543,15 @@ void MenuFactory::create_plate_menu()
         []() { return plater()->can_delete_plate(); }, m_parent);
 #endif
 
+    menu->AppendSeparator();
+
+    // Plate Settings - opens dialog with bed type, print sequence, height range modifiers, etc.
+    append_menu_item(menu, wxID_ANY, _L("Plate Settings"), _L("Configure plate-specific settings including height range modifiers"),
+        [](wxCommandEvent&) {
+            wxCommandEvent evt(EVT_OPEN_PLATESETTINGSDIALOG);
+            wxPostEvent(plater(), evt);
+        }, "cog", nullptr,
+        []() { return true; }, m_parent);
 
     // add shapes
     menu->AppendSeparator();

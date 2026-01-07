@@ -896,6 +896,10 @@ public:
     const PrintConfig&          config() const { return m_config; }
     const PrintObjectConfig&    default_object_config() const { return m_default_object_config; }
     const PrintRegionConfig& default_region_config() const { return m_default_region_config; }
+
+    // Plate-level layer config ranges
+    void set_plate_layer_config_ranges(const t_layer_config_ranges& ranges);
+    const t_layer_config_ranges& plate_layer_config_ranges() const { return m_plate_layer_config_ranges; }
     ConstPrintObjectPtrsAdaptor objects() const { return ConstPrintObjectPtrsAdaptor(&m_objects); }
     PrintObject*                get_object(size_t idx) { return const_cast<PrintObject*>(m_objects[idx]); }
     const PrintObject*          get_object(size_t idx) const { return m_objects[idx]; }
@@ -1031,6 +1035,7 @@ private:
     PrintConfig                             m_config;
     PrintObjectConfig                       m_default_object_config;
     PrintRegionConfig                       m_default_region_config;
+    t_layer_config_ranges                   m_plate_layer_config_ranges;  // Plate-level height modifiers
     PrintObjectPtrs                         m_objects;
     PrintRegionPtrs                         m_print_regions;
     

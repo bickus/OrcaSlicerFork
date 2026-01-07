@@ -3214,7 +3214,7 @@ static void apply_to_print_region_config(PrintRegionConfig &out, const DynamicPr
             }
 }
 
-PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &default_or_parent_region_config, const DynamicPrintConfig *layer_range_config, const ModelVolume &volume, size_t num_extruders)
+PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &default_or_parent_region_config, const DynamicPrintConfig *plate_layer_config, const DynamicPrintConfig *object_layer_config, const ModelVolume &volume, size_t num_extruders)
 {
     PrintRegionConfig config = default_or_parent_region_config;
     if (volume.is_model_part()) {
@@ -3227,10 +3227,17 @@ PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &defau
     apply_to_print_region_config(config, volume.config.get());
     if (! volume.material_id().empty())
         apply_to_print_region_config(config, volume.material()->config.get());
-    if (layer_range_config != nullptr) {
+    // Apply plate-level layer config first (lower priority)
+    if (plate_layer_config != nullptr) {
         // Not applicable to modifiers.
         assert(volume.is_model_part());
-    	apply_to_print_region_config(config, *layer_range_config);
+        apply_to_print_region_config(config, *plate_layer_config);
+    }
+    // Apply object-level layer config second (higher priority, overwrites plate)
+    if (object_layer_config != nullptr) {
+        // Not applicable to modifiers.
+        assert(volume.is_model_part());
+    	apply_to_print_region_config(config, *object_layer_config);
     }
     // Clamp invalid extruders to the default extruder (with index 1).
     clamp_exturder_to_default(config.sparse_infill_filament,       num_extruders);
@@ -3294,7 +3301,7 @@ SlicingParameters PrintObject::slicing_parameters(const DynamicPrintConfig &full
 		if (model_volume->is_model_part()) {
 			PrintRegion::collect_object_printing_extruders(
 				print_config,
-				region_config_from_model_volume(default_region_config, nullptr, *model_volume, filament_extruders),
+				region_config_from_model_volume(default_region_config, nullptr, nullptr, *model_volume, filament_extruders),
                 object_config.brim_type != btNoBrim && object_config.brim_width > 0.,
 				object_extruders);
 			for (const std::pair<const t_layer_height_range, ModelConfig> &range_and_config : model_object.layer_config_ranges)
@@ -3303,7 +3310,7 @@ SlicingParameters PrintObject::slicing_parameters(const DynamicPrintConfig &full
 					range_and_config.second.has("solid_infill_filament"))
 					PrintRegion::collect_object_printing_extruders(
 						print_config,
-						region_config_from_model_volume(default_region_config, &range_and_config.second.get(), *model_volume, filament_extruders),
+						region_config_from_model_volume(default_region_config, nullptr, &range_and_config.second.get(), *model_volume, filament_extruders),
                         object_config.brim_type != btNoBrim && object_config.brim_width > 0.,
 						object_extruders);
 		}

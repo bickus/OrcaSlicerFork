@@ -170,6 +170,7 @@ const std::string BBS_MODEL_CONFIG_RELS_FILE = "Metadata/_rels/model_settings.co
 const std::string SLICE_INFO_CONFIG_FILE = "Metadata/slice_info.config";
 const std::string BBS_LAYER_HEIGHTS_PROFILE_FILE = "Metadata/layer_heights_profile.txt";
 const std::string LAYER_CONFIG_RANGES_FILE = "Metadata/layer_config_ranges.xml";
+const std::string PLATE_LAYER_CONFIG_RANGES_FILE = "Metadata/plate_layer_config_ranges.xml";
 const std::string BRIM_EAR_POINTS_FILE = "Metadata/brim_ear_points.txt";
 /*const std::string SLA_SUPPORT_POINTS_FILE = "Metadata/Slic3r_PE_sla_support_points.txt";
 const std::string SLA_DRAIN_HOLES_FILE = "Metadata/Slic3r_PE_sla_drain_holes.txt";*/
@@ -1010,6 +1011,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         IdToCutObjectInfoMap       m_cut_object_infos;
         IdToLayerHeightsProfileMap m_layer_heights_profiles;
         IdToLayerConfigRangesMap m_layer_config_ranges;
+        std::map<int, t_layer_config_ranges> m_plate_layer_config_ranges;  // Plate-level height modifiers by plate index
         IdToBrimPointsMap m_brim_ear_points;
         /*IdToSlaSupportPointsMap m_sla_support_points;
         IdToSlaDrainHolesMap    m_sla_drain_holes;*/
@@ -1075,6 +1077,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         void _extract_cut_information_from_archive(mz_zip_archive &archive, const mz_zip_archive_file_stat &stat, ConfigSubstitutionContext &config_substitutions);
         void _extract_layer_heights_profile_config_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat);
         void _extract_layer_config_ranges_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, ConfigSubstitutionContext& config_substitutions);
+        void _extract_plate_layer_config_ranges_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, ConfigSubstitutionContext& config_substitutions);
         void _extract_sla_support_points_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat);
         void _extract_sla_drain_holes_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat);
         void _extract_brim_ear_points_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat);
@@ -1506,6 +1509,12 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             plate->pick_file = it->second->pick_file.empty();
             plate->pattern_bbox_file = it->second->pattern_bbox_file.empty();
             plate->config = it->second->config;
+            // Transfer plate-level height modifiers
+            {
+                auto plate_ranges_it = m_plate_layer_config_ranges.find(it->first);
+                if (plate_ranges_it != m_plate_layer_config_ranges.end())
+                    plate->layer_config_ranges = plate_ranges_it->second;
+            }
 
             if (!plate->thumbnail_file.empty())
                 _extract_from_archive(archive, plate->thumbnail_file, [&pixels = plate_data_list[it->first - 1]->plate_thumbnail.pixels](auto &archive, auto const &stat) -> bool {
@@ -1768,6 +1777,10 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
                 if (boost::algorithm::iequals(name, LAYER_CONFIG_RANGES_FILE)) {
                     // extract slic3r layer config ranges file
                     _extract_layer_config_ranges_from_archive(archive, stat, config_substitutions);
+                }
+                else if (boost::algorithm::iequals(name, PLATE_LAYER_CONFIG_RANGES_FILE)) {
+                    // extract plate-level layer config ranges file
+                    _extract_plate_layer_config_ranges_from_archive(archive, stat, config_substitutions);
                 }
                 else if (boost::algorithm::iequals(name, BRIM_EAR_POINTS_FILE)) {
                     // extract slic3r config file
@@ -2160,6 +2173,12 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             plate_data_list[it->first-1]->pick_file = (m_load_restore || it->second->pick_file.empty()) ? it->second->pick_file : m_backup_path + "/" + it->second->pick_file;
             plate_data_list[it->first-1]->pattern_bbox_file = (m_load_restore || it->second->pattern_bbox_file.empty()) ? it->second->pattern_bbox_file : m_backup_path + "/" + it->second->pattern_bbox_file;
             plate_data_list[it->first-1]->config = it->second->config;
+            // Transfer plate-level height modifiers
+            {
+                auto plate_ranges_it = m_plate_layer_config_ranges.find(it->first);
+                if (plate_ranges_it != m_plate_layer_config_ranges.end())
+                    plate_data_list[it->first-1]->layer_config_ranges = plate_ranges_it->second;
+            }
 
             current_plate_data = plate_data_list[it->first - 1];
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" << __LINE__ << boost::format(", plate %1%, thumbnail_file=%2%, no_light_thumbnail_file=%3%")%it->first %plate_data_list[it->first-1]->thumbnail_file %plate_data_list[it->first-1]->no_light_thumbnail_file;
@@ -2777,6 +2796,91 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
 
                 if (!config_ranges.empty())
                     m_layer_config_ranges.insert({ obj_idx, std::move(config_ranges) });
+            }
+        }
+    }
+
+    void _BBS_3MF_Importer::_extract_plate_layer_config_ranges_from_archive(mz_zip_archive& archive, const mz_zip_archive_file_stat& stat, ConfigSubstitutionContext& config_substitutions)
+    {
+        if (stat.m_uncomp_size > 0) {
+            std::string buffer((size_t)stat.m_uncomp_size, 0);
+            mz_bool res = mz_zip_reader_extract_file_to_mem(&archive, stat.m_filename, (void*)buffer.data(), (size_t)stat.m_uncomp_size, 0);
+            if (res == 0) {
+                add_error("Error while reading plate layer config ranges data to buffer");
+                return;
+            }
+
+            try {
+                std::istringstream iss(buffer);
+                pt::ptree plates_tree;
+                pt::read_xml(iss, plates_tree);
+
+                auto plates_node = plates_tree.get_child_optional("plates");
+                if (!plates_node) {
+                    add_error("Invalid plate layer config ranges XML: missing 'plates' element");
+                    return;
+                }
+
+                for (const auto& plate : *plates_node) {
+                    if (plate.first != "plate")
+                        continue;
+                    const pt::ptree& plate_tree = plate.second;
+                    int plate_idx = plate_tree.get<int>("<xmlattr>.index", -1);
+                    if (plate_idx < 0) {
+                        add_error("Found invalid plate index in plate layer config ranges");
+                        continue;
+                    }
+
+                    t_layer_config_ranges config_ranges;
+
+                    for (const auto& range : plate_tree) {
+                        if (range.first != "range")
+                            continue;
+                        const pt::ptree& range_tree = range.second;
+
+                        // Use get_optional to handle missing attributes gracefully
+                        auto min_z_opt = range_tree.get_optional<double>("<xmlattr>.min_z");
+                        auto max_z_opt = range_tree.get_optional<double>("<xmlattr>.max_z");
+
+                        if (!min_z_opt || !max_z_opt) {
+                            BOOST_LOG_TRIVIAL(warning) << "Skipping plate layer config range with missing min_z or max_z attribute";
+                            continue;
+                        }
+
+                        double min_z = *min_z_opt;
+                        double max_z = *max_z_opt;
+
+                        // Validate range
+                        if (max_z <= min_z) {
+                            BOOST_LOG_TRIVIAL(warning) << "Skipping invalid plate layer config range: min_z=" << min_z << " max_z=" << max_z;
+                            continue;
+                        }
+
+                        DynamicPrintConfig config;
+
+                        for (const auto& option : range_tree) {
+                            if (option.first != "option")
+                                continue;
+                            auto opt_key_opt = option.second.get_optional<std::string>("<xmlattr>.opt_key");
+                            if (!opt_key_opt || opt_key_opt->empty())
+                                continue;
+                            std::string value = option.second.data();
+
+                            config.set_deserialize(*opt_key_opt, value, config_substitutions);
+                        }
+
+                        config_ranges[{ min_z, max_z }].assign_config(config);
+                    }
+
+                    if (!config_ranges.empty())
+                        m_plate_layer_config_ranges.insert({ plate_idx, std::move(config_ranges) });
+                }
+            }
+            catch (const pt::xml_parser_error& e) {
+                add_error(std::string("Error parsing plate layer config ranges XML: ") + e.what());
+            }
+            catch (const std::exception& e) {
+                add_error(std::string("Error processing plate layer config ranges: ") + e.what());
             }
         }
     }
@@ -5603,6 +5707,7 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
         bool _add_build_to_model_stream(std::stringstream& stream, const BuildItemsList& build_items) const;
         bool _add_layer_height_profile_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_layer_config_ranges_file_to_archive(mz_zip_archive& archive, Model& model);
+        bool _add_plate_layer_config_ranges_file_to_archive(mz_zip_archive& archive, PlateDataPtrs& plate_data_list);
         bool _add_brim_ear_points_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_sla_support_points_file_to_archive(mz_zip_archive& archive, Model& model);
         bool _add_sla_drain_holes_file_to_archive(mz_zip_archive& archive, Model& model);
@@ -6008,6 +6113,12 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             // All layer height profiles of all ModelObjects are stored here, indexed by 1 based index of the ModelObject in Model.
             // The index differes from the index of an object ID of an object instance of a 3MF file!
             if (!_add_layer_config_ranges_file_to_archive(archive, model)) {
+                close_zip_writer(&archive);
+                return false;
+            }
+
+            // Adds plate layer config ranges file ("Metadata/plate_layer_config_ranges.xml").
+            if (!_add_plate_layer_config_ranges_file_to_archive(archive, plate_data_list)) {
                 close_zip_writer(&archive);
                 return false;
             }
@@ -7263,6 +7374,49 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             if (!mz_zip_writer_add_mem(&archive, LAYER_CONFIG_RANGES_FILE.c_str(), (const void*)out.data(), out.length(), MZ_DEFAULT_COMPRESSION)) {
                 add_error("Unable to add layer heights profile file to archive");
                 BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ":" << __LINE__ << boost::format("Unable to add layer heights profile file to archive\n");
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool _BBS_3MF_Exporter::_add_plate_layer_config_ranges_file_to_archive(mz_zip_archive& archive, PlateDataPtrs& plate_data_list)
+    {
+        std::string out = "";
+        pt::ptree tree;
+
+        for (const PlateData* plate_data : plate_data_list) {
+            const t_layer_config_ranges& ranges = plate_data->layer_config_ranges;
+            if (!ranges.empty()) {
+                pt::ptree& plate_tree = tree.add("plates.plate", "");
+                plate_tree.put("<xmlattr>.index", plate_data->plate_index);
+
+                for (const auto& range : ranges) {
+                    pt::ptree& range_tree = plate_tree.add("range", "");
+                    range_tree.put("<xmlattr>.min_z", range.first.first);
+                    range_tree.put("<xmlattr>.max_z", range.first.second);
+
+                    const ModelConfig& config = range.second;
+                    for (const std::string& opt_key : config.keys()) {
+                        pt::ptree& opt_tree = range_tree.add("option", config.opt_serialize(opt_key));
+                        opt_tree.put("<xmlattr>.opt_key", opt_key);
+                    }
+                }
+            }
+        }
+
+        if (!tree.empty()) {
+            std::ostringstream oss;
+            pt::write_xml(oss, tree);
+            out = oss.str();
+            boost::replace_all(out, "><", ">\n<");
+        }
+
+        if (!out.empty()) {
+            if (!mz_zip_writer_add_mem(&archive, PLATE_LAYER_CONFIG_RANGES_FILE.c_str(), (const void*)out.data(), out.length(), MZ_DEFAULT_COMPRESSION)) {
+                add_error("Unable to add plate layer config ranges file to archive");
+                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ":" << __LINE__ << boost::format("Unable to add plate layer config ranges file to archive\n");
                 return false;
             }
         }

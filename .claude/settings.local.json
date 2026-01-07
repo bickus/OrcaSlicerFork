@@ -13,7 +13,9 @@
       "Bash(unzip:*)",
       "Bash(git -C /mnt/e/wsl/git/OrcaSlicerFork diff HEAD src/libslic3r/Preset.cpp)",
       "Bash(git show:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(ls:*)",
+      "Bash(git diff:*)"
     ]
   },
   "outputStyle": "default"

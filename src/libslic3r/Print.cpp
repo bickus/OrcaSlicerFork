@@ -73,6 +73,35 @@ void Print::clear()
     m_model.clear_objects();
 }
 
+// Helper to compare t_layer_config_ranges (ModelConfig doesn't have operator==)
+static bool layer_config_ranges_equal(const t_layer_config_ranges& a, const t_layer_config_ranges& b)
+{
+    if (a.size() != b.size())
+        return false;
+    auto it_b = b.begin();
+    for (const auto& [range_a, config_a] : a) {
+        const auto& [range_b, config_b] = *it_b++;
+        // Compare ranges
+        if (std::abs(range_a.first - range_b.first) > EPSILON ||
+            std::abs(range_a.second - range_b.second) > EPSILON)
+            return false;
+        // Compare configs via their underlying DynamicPrintConfig
+        if (config_a.get() != config_b.get())
+            return false;
+    }
+    return true;
+}
+
+void Print::set_plate_layer_config_ranges(const t_layer_config_ranges& ranges)
+{
+    if (!layer_config_ranges_equal(m_plate_layer_config_ranges, ranges)) {
+        m_plate_layer_config_ranges = ranges;
+        // Invalidate all print objects to trigger region regeneration
+        for (PrintObject* obj : m_objects)
+            obj->invalidate_all_steps();
+    }
+}
+
 // Called by Print::apply().
 // This method only accepts PrintConfig option keys.
 bool Print::invalidate_state_by_config_options(const ConfigOptionResolver & /* new_config */, const std::vector<t_config_option_key> &opt_keys)

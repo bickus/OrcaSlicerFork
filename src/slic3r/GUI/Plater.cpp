@@ -14445,6 +14445,9 @@ void Plater::open_platesettings_dialog(wxCommandEvent& evt) {
 
     dlg.sync_spiral_mode(curr_plate->get_spiral_vase_mode(), !curr_plate->has_spiral_mode_config());
 
+    // Sync height range modifiers
+    dlg.sync_height_ranges(curr_plate->layer_config_ranges());
+
     dlg.Bind(EVT_SET_BED_TYPE_CONFIRM, [this, plate_index, &dlg](wxCommandEvent& e) {
         PartPlate* curr_plate = p->partplate_list.get_curr_plate();
         BedType old_bed_type = curr_plate->get_bed_type();
@@ -14482,6 +14485,9 @@ void Plater::open_platesettings_dialog(wxCommandEvent& evt) {
         else {
             curr_plate->set_spiral_vase_mode(false, true);
         }
+
+        // Save height range modifiers
+        curr_plate->layer_config_ranges() = dlg.get_height_ranges();
 
         update_project_dirty_from_presets();
         set_plater_dirty(true);

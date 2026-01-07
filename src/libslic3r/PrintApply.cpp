@@ -3,6 +3,7 @@
 
 #include <boost/log/trivial.hpp>
 #include <cfloat>
+#include <set>
 
 namespace Slic3r {
 
@@ -365,6 +366,17 @@ public:
         return it == m_ranges.end() ? nullptr : it->config;
     }
 
+    // Find the config for a specific Z position (useful for plate layer ranges where boundaries may not align with object ranges)
+    const DynamicPrintConfig* config_at_z(coordf_t z) const {
+        for (const auto& range : m_ranges) {
+            if (z >= range.layer_height_range.first - EPSILON &&
+                z < range.layer_height_range.second + EPSILON) {
+                return range.config;
+            }
+        }
+        return nullptr;
+    }
+
     std::vector<LayerRange>::const_iterator begin() const { return m_ranges.cbegin(); }
     std::vector<LayerRange>::const_iterator end  () const { return m_ranges.cend(); }
     size_t                                  size () const { return m_ranges.size(); }
@@ -694,7 +706,7 @@ PrintObjectRegions::BoundingBox find_modifier_volume_extents(const PrintObjectRe
     return out;
 }
 
-PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &default_or_parent_region_config, const DynamicPrintConfig *layer_range_config, const ModelVolume &volume, size_t num_extruders);
+PrintRegionConfig region_config_from_model_volume(const PrintRegionConfig &default_or_parent_region_config, const DynamicPrintConfig *plate_layer_config, const DynamicPrintConfig *object_layer_config, const ModelVolume &volume, size_t num_extruders);
 
 void print_region_ref_inc(PrintRegion &r) { ++ r.m_ref_cnt; }
 void print_region_ref_reset(PrintRegion &r) { r.m_ref_cnt = 0; }
@@ -753,7 +765,7 @@ bool verify_update_print_object_regions(
                             } else if (PrintObjectRegions::BoundingBox parent_bbox = find_modifier_volume_extents(layer_range, parent_region_id); parent_bbox.intersects(*bbox))
                                 // Such parent region does not exist. If it is needed, then we need to reslice.
                                 // Only create new region for a modifier, which actually modifies config of it's parent.
-                                if (PrintRegionConfig config = region_config_from_model_volume(parent_region.region->config(), nullptr, **it_model_volume, num_extruders);
+                                if (PrintRegionConfig config = region_config_from_model_volume(parent_region.region->config(), nullptr, nullptr, **it_model_volume, num_extruders);
                                     config != parent_region.region->config())
                                     // This modifier newly overrides a region, which it did not before. We need to reslice.
                                     return false;
@@ -761,8 +773,8 @@ bool verify_update_print_object_regions(
                     }
                 }
                 PrintRegionConfig cfg = region.parent == -1 ?
-                    region_config_from_model_volume(default_region_config, layer_range.config, **it_model_volume, num_extruders) :
-                    region_config_from_model_volume(layer_range.volume_regions[region.parent].region->config(), nullptr, **it_model_volume, num_extruders);
+                    region_config_from_model_volume(default_region_config, nullptr, layer_range.config, **it_model_volume, num_extruders) :
+                    region_config_from_model_volume(layer_range.volume_regions[region.parent].region->config(), nullptr, nullptr, **it_model_volume, num_extruders);
                 if (cfg != region.region->config()) {
                     // Region configuration changed.
                     if (print_region_ref_cnt(*region.region) == 0) {
@@ -926,6 +938,7 @@ static PrintObjectRegions* generate_print_object_regions(
     PrintObjectRegions                          *print_object_regions_old,
     const ModelVolumePtrs                       &model_volumes,
     const LayerRanges                           &model_layer_ranges,
+    const LayerRanges                           &plate_layer_ranges,  // Plate-level height modifiers
     const PrintRegionConfig                     &default_region_config,
     const Transform3d                           &trafo,
     size_t                                       num_extruders,
@@ -942,23 +955,71 @@ static PrintObjectRegions* generate_print_object_regions(
 
     bool reuse_old = print_object_regions_old && !print_object_regions_old->layer_ranges.empty();
 
-    if (reuse_old) {
+    // Collect all unique Z boundaries from both model and plate layer ranges
+    // This ensures plate modifiers are properly applied even when boundaries don't align
+    std::set<coordf_t> all_boundaries;
+    for (const auto &range : model_layer_ranges) {
+        all_boundaries.insert(range.layer_height_range.first);
+        // Don't add DBL_MAX to the set, we'll handle the final range separately
+        if (range.layer_height_range.second < DBL_MAX / 2)
+            all_boundaries.insert(range.layer_height_range.second);
+    }
+    for (const auto &range : plate_layer_ranges) {
+        all_boundaries.insert(range.layer_height_range.first);
+        // Don't add DBL_MAX to the set
+        if (range.layer_height_range.second < DBL_MAX / 2)
+            all_boundaries.insert(range.layer_height_range.second);
+    }
+    // Ensure we have at least the starting boundary
+    if (all_boundaries.empty())
+        all_boundaries.insert(0.);
+
+    // Build merged layer ranges from the combined boundaries
+    std::vector<coordf_t> sorted_boundaries(all_boundaries.begin(), all_boundaries.end());
+    std::vector<LayerRanges::LayerRange> merged_ranges;
+    for (size_t i = 0; i + 1 < sorted_boundaries.size(); ++i) {
+        coordf_t z_min = sorted_boundaries[i];
+        coordf_t z_max = sorted_boundaries[i + 1];
+        if (z_max > z_min + EPSILON) {
+            // Find object layer config for this range
+            const DynamicPrintConfig* object_config = model_layer_ranges.config_at_z(z_min);
+            merged_ranges.push_back({ t_layer_height_range(z_min, z_max), object_config });
+        }
+    }
+    // Add final range to DBL_MAX
+    if (!sorted_boundaries.empty()) {
+        coordf_t last_z = sorted_boundaries.back();
+        const DynamicPrintConfig* object_config = model_layer_ranges.config_at_z(last_z);
+        merged_ranges.push_back({ t_layer_height_range(last_z, DBL_MAX), object_config });
+    }
+
+    // Cannot reuse old if boundaries changed due to plate modifiers
+    bool can_reuse = reuse_old && merged_ranges.size() == layer_ranges_regions.size();
+    if (can_reuse) {
+        for (size_t i = 0; i < merged_ranges.size(); ++i) {
+            if (std::abs(merged_ranges[i].layer_height_range.first - layer_ranges_regions[i].layer_height_range.first) > EPSILON ||
+                std::abs(merged_ranges[i].layer_height_range.second - layer_ranges_regions[i].layer_height_range.second) > EPSILON) {
+                can_reuse = false;
+                break;
+            }
+        }
+    }
+
+    if (can_reuse) {
         // Reuse old bounding boxes of some ModelVolumes and their ranges.
-        // Verify that the old ranges match the new ranges.
-        assert(model_layer_ranges.size() == layer_ranges_regions.size());
-        for (const auto &range : model_layer_ranges) {
-            PrintObjectRegions::LayerRangeRegions &r = layer_ranges_regions[&range - &*model_layer_ranges.begin()];
-            assert(range.layer_height_range == r.layer_height_range);
+        for (size_t i = 0; i < merged_ranges.size(); ++i) {
+            PrintObjectRegions::LayerRangeRegions &r = layer_ranges_regions[i];
             // If model::assign_copy() is called, layer_ranges_regions is copied thus the pointers to configs are lost.
-            r.config = range.config;
+            r.config = merged_ranges[i].config;
             r.volume_regions.clear();
             r.painted_regions.clear();
             r.fuzzy_skin_painted_regions.clear();
         }
     } else {
         out->trafo_bboxes = trafo;
-        layer_ranges_regions.reserve(model_layer_ranges.size());
-        for (const auto &range : model_layer_ranges)
+        layer_ranges_regions.clear();
+        layer_ranges_regions.reserve(merged_ranges.size());
+        for (const auto &range : merged_ranges)
             layer_ranges_regions.push_back({ range.layer_height_range, range.config });
     }
 
@@ -987,9 +1048,11 @@ static PrintObjectRegions* generate_print_object_regions(
                 if (const PrintObjectRegions::BoundingBox *bbox = find_volume_extents(layer_range, volume); bbox) {
                     if (volume.is_model_part()) {
                         // Add a model volume, assign an existing region or generate a new one.
+                        // Use config_at_z() for plate ranges since plate boundaries may not align with object boundaries
+                        const DynamicPrintConfig* plate_config = plate_layer_ranges.config_at_z(layer_range.layer_height_range.first);
                         layer_range.volume_regions.push_back({
                             &volume, -1,
-                            get_create_region(region_config_from_model_volume(default_region_config, layer_range.config, volume, num_extruders)),
+                            get_create_region(region_config_from_model_volume(default_region_config, plate_config, layer_range.config, volume, num_extruders)),
                             bbox
                         });
                     } else if (volume.is_negative_volume()) {
@@ -1006,7 +1069,7 @@ static PrintObjectRegions* generate_print_object_regions(
                             if (parent_volume.is_model_part() || parent_volume.is_modifier())
                                 if (PrintObjectRegions::BoundingBox parent_bbox = find_modifier_volume_extents(layer_range, parent_region_id); parent_bbox.intersects(*bbox)) {
                                     // Only create new region for a modifier, which actually modifies config of it's parent.
-                                    if (PrintRegionConfig config = region_config_from_model_volume(parent_region.region->config(), nullptr, volume, num_extruders);
+                                    if (PrintRegionConfig config = region_config_from_model_volume(parent_region.region->config(), nullptr, nullptr, volume, num_extruders);
                                         config != parent_region.region->config()) {
                                         added = true;
                                         layer_range.volume_regions.push_back({ &volume, parent_region_id, get_create_region(std::move(config)), bbox });
@@ -1646,6 +1709,7 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                 print_object_regions,
                 print_object.model_object()->volumes,
                 LayerRanges(print_object.model_object()->layer_config_ranges),
+                LayerRanges(m_plate_layer_config_ranges),  // Plate-level height modifiers
                 m_default_region_config,
                 model_object_status.print_instances.front().trafo,
                 num_extruders ,
