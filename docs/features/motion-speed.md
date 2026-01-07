@@ -25,6 +25,7 @@ Speed control, acceleration, motion optimization, and performance tuning.
 | Travel Slope Option | small | Motion/Travel | Option for angled travel moves to reduce stringing and oozing. | v2.2.0-beta | - | [#5873](https://github.com/SoftFever/OrcaSlicer/pull/5873) |
 | Junction Deviation Machine Limit | medium | Motion/Marlin | Configure maximum Junction Deviation for Marlin firmware, replacing older jerk parameter. | v2.3.1-alpha | - | [#9234](https://github.com/SoftFever/OrcaSlicer/pull/9234) |
 | Resonance Avoidance | medium | Motion/Vibration | Sets speed ranges to skip problematic resonance frequencies, minimizing VFA artifacts. | v2.3.1-alpha | - | [#9403](https://github.com/SoftFever/OrcaSlicer/pull/9403) |
+| Per-Modifier Acceleration | medium | Motion/Acceleration | All acceleration settings (outer/inner wall, bridge, travel, infill, etc.) can be edited per-modifier (height range modifier). Allows different accelerations for different Z heights or model regions. | Швидкосрал | - | - |
 
 ## Pressure Advance
 

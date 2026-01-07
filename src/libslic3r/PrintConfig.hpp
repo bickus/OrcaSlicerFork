@@ -923,19 +923,8 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionEnum<GapFillTarget>,gap_fill_target))
     ((ConfigOptionFloat,              min_length_factor))
 
-    // Move all acceleration and jerk settings to object
+    // Default acceleration (base fallback) and jerk settings
     ((ConfigOptionFloat,              default_acceleration))
-    ((ConfigOptionFloat,              outer_wall_acceleration))
-    ((ConfigOptionFloat,              inner_wall_acceleration))
-    ((ConfigOptionFloat,              top_surface_acceleration))
-    ((ConfigOptionFloat,              initial_layer_acceleration))
-    ((ConfigOptionFloatOrPercent,     bridge_acceleration))
-    ((ConfigOptionFloatOrPercent,     internal_bridge_acceleration))
-    ((ConfigOptionFloat,              extra_bridge_acceleration))
-    ((ConfigOptionFloat,              travel_acceleration))
-    ((ConfigOptionFloat,              bridge_travel_acceleration))
-    ((ConfigOptionFloatOrPercent,     sparse_infill_acceleration))
-    ((ConfigOptionFloatOrPercent,     internal_solid_infill_acceleration))
 
     ((ConfigOptionFloat,              default_jerk))
     ((ConfigOptionFloat,              outer_wall_jerk))
@@ -1062,6 +1051,20 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatOrPercent,       overhang_2_4_speed))
     ((ConfigOptionFloatOrPercent,       overhang_3_4_speed))
     ((ConfigOptionFloatOrPercent,       overhang_4_4_speed))
+
+    // Acceleration settings (per-modifier editable)
+    ((ConfigOptionFloat,                outer_wall_acceleration))
+    ((ConfigOptionFloat,                inner_wall_acceleration))
+    ((ConfigOptionFloat,                top_surface_acceleration))
+    ((ConfigOptionFloat,                initial_layer_acceleration))
+    ((ConfigOptionFloatOrPercent,       bridge_acceleration))
+    ((ConfigOptionFloatOrPercent,       internal_bridge_acceleration))
+    ((ConfigOptionFloat,                extra_bridge_acceleration))
+    ((ConfigOptionFloat,                travel_acceleration))
+    ((ConfigOptionFloat,                bridge_travel_acceleration))
+    ((ConfigOptionFloatOrPercent,       sparse_infill_acceleration))
+    ((ConfigOptionFloatOrPercent,       internal_solid_infill_acceleration))
+
     ((ConfigOptionBool,                 only_one_wall_top))
 
     //SoftFever
