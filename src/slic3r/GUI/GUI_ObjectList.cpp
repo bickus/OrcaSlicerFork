@@ -6237,6 +6237,13 @@ void ObjectList::reload_all_plates(bool notify_partplate)
     for (int i = 0; i < ppl.get_plate_count(); i++) {
         PartPlate* pp = ppl.get_plate(i);
         m_objects_model->AddPlate(pp, wxEmptyString);
+
+        // Restore PHM (Plate Height Modifier) tree items if plate has layer config ranges
+        if (!pp->layer_config_ranges().empty()) {
+            wxDataViewItem plate_item = m_objects_model->GetItemByPlateId(i);
+            if (plate_item.IsOk())
+                add_plate_layer_root_item(plate_item);
+        }
     }
 
     size_t obj_idx = 0;
