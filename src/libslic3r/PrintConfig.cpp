@@ -4719,10 +4719,10 @@ void PrintConfigDef::init_fff_params()
     def->tooltip = L("Override retraction length for layers in this height range. "
                      "Set to 0 to disable retractions entirely for this range.");
     def->sidetext = L("mm");
-    def->min = 0;
+    def->min = -1;  // -1 means "not set", 0+ is valid override
     def->max = 10;
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(0));
+    def->set_default_value(new ConfigOptionFloat(-1));
 
     def = this->add("role_based_wipe_speed", coBool);
     def->label = L("Role base wipe speed");

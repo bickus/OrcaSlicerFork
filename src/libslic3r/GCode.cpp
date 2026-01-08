@@ -3857,8 +3857,8 @@ LayerResult GCode::process_layer(
                         const ConfigOption* opt = range.second.option("override_retractions");
                         if (opt != nullptr && static_cast<const ConfigOptionBool*>(opt)->value) {
                             current_override_active = true;
-                            if (range.second.has("retraction_length_override"))
-                                current_retraction_override = static_cast<float>(range.second.opt_float("retraction_length_override"));
+                            // Always read the value - default is -1 (not set), 0+ is valid override
+                            current_retraction_override = static_cast<float>(range.second.opt_float("retraction_length_override"));
                         }
                     }
                     break;
