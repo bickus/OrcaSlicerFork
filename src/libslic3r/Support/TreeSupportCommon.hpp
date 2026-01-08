@@ -38,6 +38,7 @@ struct TreeSupportMeshGroupSettings {
     {
         const PrintConfig       &print_config       = print_object.print()->config();
         const PrintObjectConfig &config             = print_object.config();
+        const PrintRegionConfig &region_config      = print_object.print()->default_region_config();
         const SlicingParameters &slicing_params     = print_object.slicing_parameters();
     //    const std::vector<unsigned int>  printing_extruders = print_object.object_extruders();
 
@@ -55,7 +56,7 @@ struct TreeSupportMeshGroupSettings {
         this->layer_height              = scaled<coord_t>(config.layer_height.value);
         this->resolution                = scaled<coord_t>(print_config.resolution.value);
         // Arache feature
-        this->min_feature_size          = scaled<coord_t>(config.min_feature_size.value);
+        this->min_feature_size          = scaled<coord_t>(region_config.min_feature_size.value);
         // +1 makes the threshold inclusive
         this->support_angle             = 0.5 * M_PI - std::clamp<double>((config.support_threshold_angle + 1) * M_PI / 180., 0., 0.5 * M_PI);
         this->support_line_width        = support_material_flow(&print_object, config.layer_height).scaled_width();

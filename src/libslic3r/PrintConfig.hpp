@@ -904,14 +904,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionBool,               detect_narrow_internal_solid_infill))
     // ((ConfigOptionBool,               adaptive_layer_height))
     ((ConfigOptionFloat,              support_bottom_interface_spacing))
-    ((ConfigOptionEnum<PerimeterGeneratorType>, wall_generator))
-    ((ConfigOptionPercent,            wall_transition_length))
-    ((ConfigOptionPercent,            wall_transition_filter_deviation))
-    ((ConfigOptionFloat,              wall_transition_angle))
-    ((ConfigOptionInt,                wall_distribution_count))
-    ((ConfigOptionPercent,            min_feature_size))
-    ((ConfigOptionPercent,            initial_layer_min_bead_width))
-    ((ConfigOptionPercent,            min_bead_width))
 
     // Orca
     ((ConfigOptionFloat,              make_overhang_printable_angle))
@@ -921,7 +913,6 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat,              tree_support_branch_diameter_organic))
     ((ConfigOptionFloat,              tree_support_branch_angle_organic))
     ((ConfigOptionEnum<GapFillTarget>,gap_fill_target))
-    ((ConfigOptionFloat,              min_length_factor))
 
     // Default acceleration (base fallback) and jerk settings
     ((ConfigOptionFloat,              default_acceleration))
@@ -1041,6 +1032,16 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloat, internal_solid_infill_speed))
     // Detect thin walls.
     ((ConfigOptionBool, detect_thin_wall))
+    // Wall generator settings (per-region)
+    ((ConfigOptionEnum<PerimeterGeneratorType>, wall_generator))
+    ((ConfigOptionPercent,            wall_transition_length))
+    ((ConfigOptionPercent,            wall_transition_filter_deviation))
+    ((ConfigOptionFloat,              wall_transition_angle))
+    ((ConfigOptionInt,                wall_distribution_count))
+    ((ConfigOptionPercent,            min_feature_size))
+    ((ConfigOptionPercent,            initial_layer_min_bead_width))
+    ((ConfigOptionPercent,            min_bead_width))
+    ((ConfigOptionFloat,              min_length_factor))
     ((ConfigOptionFloatOrPercent, top_surface_line_width))
     ((ConfigOptionInt, top_shell_layers))
     ((ConfigOptionFloat, top_shell_thickness))

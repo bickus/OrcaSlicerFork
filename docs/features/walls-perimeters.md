@@ -23,6 +23,7 @@ Wall generation, ordering, and perimeter control features.
 | Wall Direction Specification | small | Walls/Control | User control over wall printing directions (clockwise/counter-clockwise). | v2.0.0-beta | - | [#4156](https://github.com/SoftFever/OrcaSlicer/pull/4156) |
 | Short Wall/Perimeter Cleaning | small | Walls/Arachne | Configurable cleaning of very short wall segments in Arachne generator. | v2.0.0-beta | - | [#2790](https://github.com/SoftFever/OrcaSlicer/pull/2790) |
 | Inner/Outer Wall Ordering | medium | Walls/Order | Enhanced logic for determining wall print order with improved edge case handling. | v1.0 | v2.2.0-beta | [#6138](https://github.com/SoftFever/OrcaSlicer/pull/6138) |
+| Wall Generator per Object/Modifier | medium | Walls/Generator | Wall Generator setting (Arachne vs Classic) available at object and modifier level for per-region control. | v2.3.1-fork | - | - |
 
 ## Wall Generation Algorithms
 
@@ -38,6 +39,12 @@ Traditional fixed-width wall generation, useful for:
 - Predictable extrusion widths
 - Simpler toolpath planning
 - Compatibility with older slicers
+
+### Per-Object/Modifier Wall Generator (Fork Feature)
+The Wall Generator setting can be overridden at the object or modifier level, allowing:
+- Different wall algorithms for different objects on the same plate
+- Height range modifiers to switch between Arachne and Classic for specific Z ranges
+- Fine-tuned control over wall generation for complex multi-part prints
 
 ## Wall Ordering Options
 
