@@ -1,7 +1,6 @@
 ---
 name: orcaslicer-settings
-description: |
-  Guide for adding new or editing existing settings in OrcaSlicer process/printer/filament profiles.
+description: Guide for adding new or editing existing settings in OrcaSlicer process/printer/filament profiles.
   IMPORTANT: This skill researches similar existing settings first and provides recommendations based
   on how they are implemented (types, defaults, config classes, fallbacks) before asking clarification
   questions. Use when asked to: (1) Add a new setting/parameter/option to print/process profiles,
@@ -79,6 +78,7 @@ Recommendation: Use coFloat with default=0, in PrintObjectConfig (like travel_ac
 - **Process settings** - See [references/process-settings.md](references/process-settings.md)
 - **Filament settings** - See [references/filament-settings.md](references/filament-settings.md)
 - **Printer settings** - See [references/printer-settings.md](references/printer-settings.md)
+- **PHM-only settings** - See [references/phm-only-settings.md](references/phm-only-settings.md) (Plate Height Modifiers only, not shown in general/per-object/object-layer tabs)
 
 Each reference contains profile-specific guidance on config classes, preset arrays, GUI tabs, and visibility toggling.
 
