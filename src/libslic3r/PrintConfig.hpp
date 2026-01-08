@@ -1115,6 +1115,9 @@ PRINT_CONFIG_CLASS_DEFINE(
     ((ConfigOptionFloatOrPercent,       scarf_joint_speed))
     ((ConfigOptionFloat,                scarf_joint_flow_ratio))
     ((ConfigOptionPercent,              scarf_overhang_threshold))
+
+    // Orca: PHM-only settings (Plate Height Modifiers)
+    ((ConfigOptionInt,                  nozzle_temperature_override))
 )
 
 PRINT_CONFIG_CLASS_DEFINE(

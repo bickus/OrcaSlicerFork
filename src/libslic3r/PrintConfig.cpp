@@ -4691,6 +4691,20 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionBool(false));
 
+    // Orca: PHM-only settings (Plate Height Modifiers)
+    def = this->add("nozzle_temperature_override", coInt);
+    def->label = L("Nozzle temperature");
+    def->category = L("Filament");
+    def->tooltip = L("Override the nozzle temperature for layers in this height range. "
+                     "Set to 0 to use the default filament temperature. "
+                     "When non-zero, an M104 command will be emitted at the start of each layer in the range. "
+                     "After the range ends, the temperature will be reset to the filament's default.");
+    def->sidetext = L("°C");
+    def->min = 0;
+    def->max = 400;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionInt(0));
+
     def = this->add("role_based_wipe_speed", coBool);
     def->label = L("Role base wipe speed");
     def->tooltip = L("The wipe speed is determined by the speed of the current extrusion role. "
@@ -7262,6 +7276,13 @@ void PrintConfigDef::handle_legacy_composite(DynamicPrintConfig &config)
             }
         }
         config.set_key_value("wiping_volumes_use_custom_matrix", new ConfigOptionBool(custom));
+    }
+
+    // PHM: nozzle_temperature_override (added for Plate Height Modifiers)
+    if (!config.has("nozzle_temperature_override")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("nozzle_temperature_override");
+        if (default_opt != nullptr)
+            config.set_key_value("nozzle_temperature_override", default_opt->clone());
     }
 }
 

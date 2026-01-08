@@ -472,7 +472,7 @@ public:
 
 	void build() override;
 
-	void set_model_config(std::map<ObjectBase *, ModelConfig *> const & object_configs);
+	virtual void set_model_config(std::map<ObjectBase *, ModelConfig *> const & object_configs);
 
 	bool has_model_config() const { return !m_object_configs.empty(); }
 
@@ -546,9 +546,23 @@ public:
 	//BBS: GUI refactor
 	TabPrintLayer(ParamsPanel* parent);
 	~TabPrintLayer() {}
+
+	// Override to add PHM-only options after parent build
+	void build() override;
+
+	// Returns true if currently editing plate height modifiers, false for object layer ranges
+	bool is_plate_context() const { return m_is_plate_context; }
+
+	// Override to detect PHM vs object layer context and show/hide PHM-only options
+	virtual void set_model_config(std::map<ObjectBase *, ModelConfig *> const & object_configs) override;
 protected:
 	virtual void    notify_changed(ObjectBase* object) override;
 	virtual void    update_custom_dirty() override;
+
+	// Update visibility of PHM-only options based on context
+	void update_phm_options_visibility();
+
+	bool m_is_plate_context = false;  // true for PHM, false for object layer ranges
 };
 
 class TabFilament : public Tab

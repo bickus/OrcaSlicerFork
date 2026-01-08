@@ -3807,6 +3807,45 @@ LayerResult GCode::process_layer(
     //BBS: set layer time fan speed after layer change gcode
     gcode += ";_SET_FAN_SPEED_CHANGING_LAYER\n";
 
+    // PHM: Handle nozzle temperature override from plate height modifiers
+    {
+        int current_temp_override = 0;
+        const auto& plate_ranges = print.plate_layer_config_ranges();
+        if (!plate_ranges.empty()) {
+            // Find the config at current Z using half-open interval [start, end)
+            for (const auto& range : plate_ranges) {
+                if (print_z >= range.first.first - EPSILON && print_z < range.first.second) {
+                    if (range.second.has("nozzle_temperature_override")) {
+                        int temp_value = range.second.opt_int("nozzle_temperature_override");
+                        if (temp_value != 0) {
+                            current_temp_override = temp_value;
+                            BOOST_LOG_TRIVIAL(debug) << "[PHM] GCode: Found nozzle_temperature_override=" << current_temp_override
+                                                     << " at Z=" << print_z << " in range [" << range.first.first << ", " << range.first.second << ")";
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Check if temperature override changed from previous layer
+        if (current_temp_override != m_last_nozzle_temp_override) {
+            if (current_temp_override != 0) {
+                // Set override temperature
+                BOOST_LOG_TRIVIAL(info) << "[PHM] GCode: Setting temperature override to " << current_temp_override << "°C at Z=" << print_z;
+                gcode += m_writer.set_temperature(current_temp_override, false);  // M104 (no wait)
+            } else if (m_last_nozzle_temp_override != 0) {
+                // Reset to filament default temperature
+                // Get temperature of current extruder's filament
+                unsigned int extruder_id = m_writer.extruder()->id();
+                int filament_temp = print.config().nozzle_temperature.get_at(extruder_id);
+                BOOST_LOG_TRIVIAL(info) << "[PHM] GCode: Resetting temperature to filament default " << filament_temp << "°C at Z=" << print_z;
+                gcode += m_writer.set_temperature(filament_temp, false);  // M104 (no wait)
+            }
+            m_last_nozzle_temp_override = current_temp_override;
+        }
+    }
+
     //Calibration Layer-specific GCode
     switch (print.calib_mode()) {
         case CalibMode::Calib_PA_Tower: {

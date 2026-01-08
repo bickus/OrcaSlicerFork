@@ -236,7 +236,8 @@ bool ObjectSettings::update_settings_list()
                 auto& plate_layer_ranges = plate->layer_config_ranges();
                 if (plate_layer_ranges.find(height_range) != plate_layer_ranges.end()) {
                     plate_configs.emplace(plate, &cfg);
-                    object_configs.emplace((ObjectBase*)(&plate_layer_ranges.at(height_range)), &plate_layer_ranges.at(height_range));
+                    // Use PartPlate* as the key so TabPrintLayer can detect PHM context
+                    object_configs.emplace(plate, &plate_layer_ranges.at(height_range));
                 }
             }
             continue;

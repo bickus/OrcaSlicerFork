@@ -35,6 +35,7 @@
 #include "GUI_App.hpp"
 #include "GUI_ObjectList.hpp"
 #include "Plater.hpp"
+#include "PartPlate.hpp"
 #include "MainFrame.hpp"
 #include "format.hpp"
 #include "UnsavedChangesDialog.hpp"
@@ -63,6 +64,9 @@ namespace GUI {
 #define DISABLE_UNDO_SYS
 
 static const std::vector<std::string> plate_keys = { "curr_bed_type", "skirt_start_angle", "first_layer_print_sequence", "first_layer_sequence_choice", "other_layers_print_sequence", "other_layers_sequence_choice", "print_sequence", "spiral_mode"};
+
+// Keys for PHM-only settings (Plate Height Modifiers only, not shown for object layer ranges)
+static const std::vector<std::string> phm_only_keys = { "nozzle_temperature_override" };
 
 void Tab::Highlighter::set_timer_owner(wxEvtHandler* owner, int timerid/* = wxID_ANY*/)
 {
@@ -2479,6 +2483,8 @@ void TabPrint::build()
         optgroup->append_single_option_line("interlocking_boundary_avoidance", "multimaterial_settings_advanced#interlocking-boundary-avoidance");
 
 page = add_options_page(L("Others"), "custom-gcode_other"); // ORCA: icon only visible on placeholders
+        // NOTE: PHM-only Filament section is added by TabPrintLayer::build(), not here
+
         optgroup = page->new_optgroup(L("Skirt"), L"param_skirt");
 optgroup->append_single_option_line("skirt_loops", "others_settings_skirt#loops");
         optgroup->append_single_option_line("skirt_type", "others_settings_skirt#type");
@@ -3199,10 +3205,62 @@ void TabPrintPart::notify_changed(ObjectBase * object)
 }
 
 static std::string layer_height = "layer_height";
+
 TabPrintLayer::TabPrintLayer(ParamsPanel* parent) :
     TabPrintModel(parent, concat({ layer_height }, PrintRegionConfig().keys()))
 {
     m_parent_tab = wxGetApp().get_model_tab();
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] TabPrintLayer constructed with " << m_keys.size() << " keys";
+    // Log whether key setting is in the list
+    bool has_temp = std::find(m_keys.begin(), m_keys.end(), "nozzle_temperature_override") != m_keys.end();
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   'nozzle_temperature_override' in m_keys: " << has_temp;
+    // NOTE: update_phm_options_visibility() is called at end of build() after pages are created
+}
+
+void TabPrintLayer::build()
+{
+    BOOST_LOG_TRIVIAL(debug) << "[PHM-BUILD] TabPrintLayer::build() starting";
+
+    // Call parent build which creates all pages and filters options
+    TabPrintModel::build();
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM-BUILD] TabPrintLayer::build() after parent build, m_pages.size()=" << m_pages.size();
+
+    // Find or create the "Others" page for PHM-only settings
+    PageShp others_page;
+    for (auto& page : m_pages) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM-BUILD]   Page: '" << page->title() << "'";
+        if (page->title() == "Others") {
+            others_page = page;
+            break;
+        }
+    }
+
+    // If "Others" page doesn't exist (was filtered out), create it
+    if (!others_page) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM-BUILD]   'Others' page not found, creating it";
+        others_page = add_options_page(L("Others"), "custom-gcode_other");
+    } else {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM-BUILD]   Found 'Others' page";
+    }
+
+    // Add PHM-only Nozzle Temperature optgroup at the beginning of Others page
+    BOOST_LOG_TRIVIAL(debug) << "[PHM-BUILD]   Adding Nozzle Temperature optgroup";
+    auto optgroup = others_page->new_optgroup(L("Nozzle Temperature"), "param_extruder_temp");
+    optgroup->append_single_option_line("nozzle_temperature_override");
+
+    // Move Nozzle Temperature optgroup to the front of the optgroups list
+    if (others_page->m_optgroups.size() > 1) {
+        auto temp_group = others_page->m_optgroups.back();
+        others_page->m_optgroups.pop_back();
+        others_page->m_optgroups.insert(others_page->m_optgroups.begin(), temp_group);
+    }
+    BOOST_LOG_TRIVIAL(debug) << "[PHM-BUILD]   Nozzle Temperature optgroup added, total optgroups=" << others_page->m_optgroups.size();
+
+    // NOTE: Don't call update_phm_options_visibility() here - the UI sizers aren't ready yet.
+    // Visibility will be updated when set_model_config() is called after UI is fully constructed.
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM-BUILD] TabPrintLayer::build() completed";
 }
 
 void TabPrintLayer::notify_changed(ObjectBase * object)
@@ -3254,6 +3312,70 @@ void TabPrintLayer::update_custom_dirty()
         }
         else if (config.second->opt_float(layer_height) == option->getFloat())
             m_options_list[layer_height] = osInitValue | osSystemValue;
+    }
+}
+
+void TabPrintLayer::set_model_config(std::map<ObjectBase *, ModelConfig *> const & object_configs)
+{
+    // Detect if we're in PHM context (PartPlate) or object layer context (ModelObject)
+    m_is_plate_context = std::any_of(object_configs.begin(), object_configs.end(),
+        [](const auto& pair) { return dynamic_cast<PartPlate*>(pair.first) != nullptr; });
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] TabPrintLayer::set_model_config() - context: "
+                             << (m_is_plate_context ? "PHM (plate)" : "object layers");
+
+    // Call parent implementation
+    TabPrintModel::set_model_config(object_configs);
+
+    // Always update PHM-only options visibility to ensure correct state
+    // (can't do this during build() because UI sizers aren't ready yet)
+    update_phm_options_visibility();
+}
+
+void TabPrintLayer::update_phm_options_visibility()
+{
+    BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS] update_phm_options_visibility() called, m_is_plate_context=" << m_is_plate_context;
+    BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]   m_pages.size()=" << m_pages.size();
+
+    bool found_others_page = false;
+    bool found_filament_group = false;
+
+    // Find the "Others" page and show/hide PHM-only optgroups
+    for (auto& page : m_pages) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]   Checking page: '" << page->title() << "'";
+        if (page->title() == "Others") {
+            found_others_page = true;
+            BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]   Found 'Others' page with " << page->m_optgroups.size() << " optgroups";
+            for (auto& optgroup : page->m_optgroups) {
+                BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]     Checking optgroup: '" << optgroup->title << "'";
+                if (optgroup->title == "Nozzle Temperature") {
+                    found_filament_group = true;
+                    // Only call Show() if the optgroup's sizer is initialized (UI is ready)
+                    if (optgroup->is_activated()) {
+                        BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]     Found 'Nozzle Temperature' optgroup, calling Show(" << m_is_plate_context << ")";
+                        optgroup->Show(m_is_plate_context);
+                    } else {
+                        BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]     Found 'Nozzle Temperature' optgroup but sizer not ready, skipping Show()";
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    if (!found_others_page) {
+        BOOST_LOG_TRIVIAL(warning) << "[PHM-VIS]   WARNING: 'Others' page NOT found!";
+    }
+    if (!found_filament_group) {
+        BOOST_LOG_TRIVIAL(warning) << "[PHM-VIS]   WARNING: 'Nozzle Temperature' optgroup NOT found!";
+    }
+
+    // Trigger layout update
+    if (m_parent) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]   Calling m_parent->Layout()";
+        m_parent->Layout();
+    } else {
+        BOOST_LOG_TRIVIAL(warning) << "[PHM-VIS]   WARNING: m_parent is null!";
     }
 }
 
