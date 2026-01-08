@@ -1510,8 +1510,10 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             plate->pattern_bbox_file = it->second->pattern_bbox_file.empty();
             plate->config = it->second->config;
             // Transfer plate-level height modifiers
+            // Note: m_plate_layer_config_ranges uses 0-based plate indices (from plate_layer_config_ranges.xml)
+            // but m_plater_data uses 1-based indices (from plater_id in model_settings.config)
             {
-                auto plate_ranges_it = m_plate_layer_config_ranges.find(it->first);
+                auto plate_ranges_it = m_plate_layer_config_ranges.find(it->first - 1);
                 if (plate_ranges_it != m_plate_layer_config_ranges.end())
                     plate->layer_config_ranges = plate_ranges_it->second;
             }
@@ -2174,8 +2176,10 @@ void PlateData::parse_filament_info(GCodeProcessorResult *result)
             plate_data_list[it->first-1]->pattern_bbox_file = (m_load_restore || it->second->pattern_bbox_file.empty()) ? it->second->pattern_bbox_file : m_backup_path + "/" + it->second->pattern_bbox_file;
             plate_data_list[it->first-1]->config = it->second->config;
             // Transfer plate-level height modifiers
+            // Note: m_plate_layer_config_ranges uses 0-based plate indices (from plate_layer_config_ranges.xml)
+            // but m_plater_data uses 1-based indices (from plater_id in model_settings.config)
             {
-                auto plate_ranges_it = m_plate_layer_config_ranges.find(it->first);
+                auto plate_ranges_it = m_plate_layer_config_ranges.find(it->first - 1);
                 if (plate_ranges_it != m_plate_layer_config_ranges.end())
                     plate_data_list[it->first-1]->layer_config_ranges = plate_ranges_it->second;
             }
