@@ -66,7 +66,7 @@ namespace GUI {
 static const std::vector<std::string> plate_keys = { "curr_bed_type", "skirt_start_angle", "first_layer_print_sequence", "first_layer_sequence_choice", "other_layers_print_sequence", "other_layers_sequence_choice", "print_sequence", "spiral_mode"};
 
 // Keys for PHM-only settings (Plate Height Modifiers only, not shown for object layer ranges)
-static const std::vector<std::string> phm_only_keys = { "nozzle_temperature_override" };
+static const std::vector<std::string> phm_only_keys = { "nozzle_temperature_override", "override_retractions", "retraction_length_override" };
 
 void Tab::Highlighter::set_timer_owner(wxEvtHandler* owner, int timerid/* = wxID_ANY*/)
 {
@@ -3257,6 +3257,20 @@ void TabPrintLayer::build()
     }
     BOOST_LOG_TRIVIAL(debug) << "[PHM-BUILD]   Nozzle Temperature optgroup added, total optgroups=" << others_page->m_optgroups.size();
 
+    // Add PHM-only Retraction optgroup after Nozzle Temperature
+    BOOST_LOG_TRIVIAL(debug) << "[PHM-BUILD]   Adding Retraction optgroup";
+    optgroup = others_page->new_optgroup(L("Retraction"), "param_retraction");
+    optgroup->append_single_option_line("override_retractions");
+    optgroup->append_single_option_line("retraction_length_override");
+
+    // Move Retraction optgroup to second position (after Nozzle Temperature)
+    if (others_page->m_optgroups.size() > 2) {
+        auto retract_group = others_page->m_optgroups.back();
+        others_page->m_optgroups.pop_back();
+        others_page->m_optgroups.insert(others_page->m_optgroups.begin() + 1, retract_group);
+    }
+    BOOST_LOG_TRIVIAL(debug) << "[PHM-BUILD]   Retraction optgroup added, total optgroups=" << others_page->m_optgroups.size();
+
     // NOTE: Don't call update_phm_options_visibility() here - the UI sizers aren't ready yet.
     // Visibility will be updated when set_model_config() is called after UI is fully constructed.
 
@@ -3338,7 +3352,8 @@ void TabPrintLayer::update_phm_options_visibility()
     BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]   m_pages.size()=" << m_pages.size();
 
     bool found_others_page = false;
-    bool found_filament_group = false;
+    bool found_nozzle_temp_group = false;
+    bool found_retraction_group = false;
 
     // Find the "Others" page and show/hide PHM-only optgroups
     for (auto& page : m_pages) {
@@ -3349,13 +3364,23 @@ void TabPrintLayer::update_phm_options_visibility()
             for (auto& optgroup : page->m_optgroups) {
                 BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]     Checking optgroup: '" << optgroup->title << "'";
                 if (optgroup->title == "Nozzle Temperature") {
-                    found_filament_group = true;
+                    found_nozzle_temp_group = true;
                     // Only call Show() if the optgroup's sizer is initialized (UI is ready)
                     if (optgroup->is_activated()) {
                         BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]     Found 'Nozzle Temperature' optgroup, calling Show(" << m_is_plate_context << ")";
                         optgroup->Show(m_is_plate_context);
                     } else {
                         BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]     Found 'Nozzle Temperature' optgroup but sizer not ready, skipping Show()";
+                    }
+                }
+                if (optgroup->title == "Retraction") {
+                    found_retraction_group = true;
+                    // Only call Show() if the optgroup's sizer is initialized (UI is ready)
+                    if (optgroup->is_activated()) {
+                        BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]     Found 'Retraction' optgroup, calling Show(" << m_is_plate_context << ")";
+                        optgroup->Show(m_is_plate_context);
+                    } else {
+                        BOOST_LOG_TRIVIAL(debug) << "[PHM-VIS]     Found 'Retraction' optgroup but sizer not ready, skipping Show()";
                     }
                 }
             }
@@ -3366,8 +3391,11 @@ void TabPrintLayer::update_phm_options_visibility()
     if (!found_others_page) {
         BOOST_LOG_TRIVIAL(warning) << "[PHM-VIS]   WARNING: 'Others' page NOT found!";
     }
-    if (!found_filament_group) {
+    if (!found_nozzle_temp_group) {
         BOOST_LOG_TRIVIAL(warning) << "[PHM-VIS]   WARNING: 'Nozzle Temperature' optgroup NOT found!";
+    }
+    if (!found_retraction_group) {
+        BOOST_LOG_TRIVIAL(warning) << "[PHM-VIS]   WARNING: 'Retraction' optgroup NOT found!";
     }
 
     // Trigger layout update

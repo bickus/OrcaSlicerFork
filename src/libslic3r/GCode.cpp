@@ -3846,6 +3846,56 @@ LayerResult GCode::process_layer(
         }
     }
 
+    // PHM: Handle retraction override from plate height modifiers
+    {
+        bool current_override_active = false;
+        float current_retraction_override = -1.0f;
+
+        const auto& plate_ranges = print.plate_layer_config_ranges();
+        if (!plate_ranges.empty()) {
+            // Find the config at current Z using half-open interval [start, end)
+            for (const auto& range : plate_ranges) {
+                if (print_z >= range.first.first - EPSILON && print_z < range.first.second) {
+                    if (range.second.has("override_retractions")) {
+                        const ConfigOption* opt = range.second.option("override_retractions");
+                        if (opt != nullptr && static_cast<const ConfigOptionBool*>(opt)->value) {
+                            current_override_active = true;
+                            if (range.second.has("retraction_length_override")) {
+                                current_retraction_override = static_cast<float>(range.second.opt_float("retraction_length_override"));
+                                BOOST_LOG_TRIVIAL(debug) << "[PHM] GCode: Found retraction override, length="
+                                                         << current_retraction_override << " at Z=" << print_z
+                                                         << " in range [" << range.first.first << ", " << range.first.second << ")";
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Apply or reset retraction override when it changes
+        if (current_override_active != m_retraction_override_active ||
+            (current_override_active && current_retraction_override != m_retraction_length_override)) {
+
+            if (current_override_active && current_retraction_override >= 0) {
+                // Apply override (including 0 for no retraction)
+                DynamicConfig override_cfg;
+                override_cfg.set_key_value("retraction_length", new ConfigOptionFloats{current_retraction_override});
+                m_writer.config.apply(override_cfg);
+                BOOST_LOG_TRIVIAL(info) << "[PHM] GCode: Applied retraction_length=" << current_retraction_override << " at Z=" << print_z;
+            } else if (!current_override_active && m_retraction_override_active) {
+                // Reset to default from print config
+                DynamicConfig reset_cfg;
+                reset_cfg.set_key_value("retraction_length", print.config().retraction_length.clone());
+                m_writer.config.apply(reset_cfg);
+                BOOST_LOG_TRIVIAL(info) << "[PHM] GCode: Reset retraction_length to default at Z=" << print_z;
+            }
+
+            m_retraction_override_active = current_override_active;
+            m_retraction_length_override = current_retraction_override;
+        }
+    }
+
     //Calibration Layer-specific GCode
     switch (print.calib_mode()) {
         case CalibMode::Calib_PA_Tower: {

@@ -4705,6 +4705,25 @@ void PrintConfigDef::init_fff_params()
     def->mode = comAdvanced;
     def->set_default_value(new ConfigOptionInt(0));
 
+    // Orca: PHM-only settings - Retraction override
+    def = this->add("override_retractions", coBool);
+    def->label = L("Override retractions");
+    def->category = L("Others");
+    def->tooltip = L("Enable to override the retraction length for layers in this height range.");
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionBool(false));
+
+    def = this->add("retraction_length_override", coFloat);
+    def->label = L("Retraction length");
+    def->category = L("Others");
+    def->tooltip = L("Override retraction length for layers in this height range. "
+                     "Set to 0 to disable retractions entirely for this range.");
+    def->sidetext = L("mm");
+    def->min = 0;
+    def->max = 10;
+    def->mode = comAdvanced;
+    def->set_default_value(new ConfigOptionFloat(0));
+
     def = this->add("role_based_wipe_speed", coBool);
     def->label = L("Role base wipe speed");
     def->tooltip = L("The wipe speed is determined by the speed of the current extrusion role. "
@@ -7283,6 +7302,20 @@ void PrintConfigDef::handle_legacy_composite(DynamicPrintConfig &config)
         const ConfigOption *default_opt = FullPrintConfig::defaults().option("nozzle_temperature_override");
         if (default_opt != nullptr)
             config.set_key_value("nozzle_temperature_override", default_opt->clone());
+    }
+
+    // PHM: override_retractions (added for Plate Height Modifiers)
+    if (!config.has("override_retractions")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("override_retractions");
+        if (default_opt != nullptr)
+            config.set_key_value("override_retractions", default_opt->clone());
+    }
+
+    // PHM: retraction_length_override (added for Plate Height Modifiers)
+    if (!config.has("retraction_length_override")) {
+        const ConfigOption *default_opt = FullPrintConfig::defaults().option("retraction_length_override");
+        if (default_opt != nullptr)
+            config.set_key_value("retraction_length_override", default_opt->clone());
     }
 }
 

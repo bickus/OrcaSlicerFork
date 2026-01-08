@@ -1118,6 +1118,8 @@ PRINT_CONFIG_CLASS_DEFINE(
 
     // Orca: PHM-only settings (Plate Height Modifiers)
     ((ConfigOptionInt,                  nozzle_temperature_override))
+    ((ConfigOptionBool,                 override_retractions))
+    ((ConfigOptionFloat,                retraction_length_override))
 )
 
 PRINT_CONFIG_CLASS_DEFINE(

@@ -546,6 +546,9 @@ private:
     float                               m_last_width{ 0.0f };
     // PHM: Track previous layer's nozzle temperature override value (0 = no override)
     int                                 m_last_nozzle_temp_override{ 0 };
+    // PHM: Track retraction override state (-1 = no override, >= 0 = override value)
+    bool                                m_retraction_override_active{ false };
+    float                               m_retraction_length_override{ -1.0f };
 #if ENABLE_GCODE_VIEWER_DATA_CHECKING
     double                              m_last_mm3_per_mm;
 #endif // ENABLE_GCODE_VIEWER_DATA_CHECKING
