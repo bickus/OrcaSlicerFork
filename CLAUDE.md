@@ -83,9 +83,10 @@ OrcaSlicer is an open-source 3D slicer application forked from Bambu Studio, bui
 ### Code Style and Standards
 - **C++17 standard** with selective C++20 features
 - **Naming conventions**: PascalCase for classes, snake_case for functions/variables
-- **Header guards**: Use `#pragma once` 
+- **Header guards**: Use `#pragma once`
 - **Memory management**: Prefer smart pointers, RAII patterns
 - **Thread safety**: Use TBB for parallelization, be mindful of shared state
+- **Logging**: New features must include debug-level logging with a unique prefix for diagnostics (see [docs/dev/logging/](docs/dev/logging/))
 
 ### Common Development Tasks
 
@@ -125,6 +126,7 @@ When working on specific areas, read the relevant guide from `docs/` for detaile
 |------|----------|--------------|
 | **Features Overview** | [docs/features/README.md](docs/features/README.md) | Understanding OrcaSlicer capabilities, finding feature PRs, or adding new features |
 | Bridging | [docs/dev/bridging.md](docs/dev/bridging.md) | Working on bridge detection, settings, fill, or G-code |
+| Logging | [docs/dev/logging/](docs/dev/logging/) | Adding debug logging, log levels, unique prefixes ([user guide](docs/dev/logging/user-guide.md) for log locations/viewing) |
 
 #### Features Documentation
 

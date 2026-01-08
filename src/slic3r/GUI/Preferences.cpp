@@ -397,7 +397,11 @@ wxBoxSizer *PreferencesDialog::create_item_loglevel_combobox(wxString title, wxW
     for (iter = vlist.begin(); iter != vlist.end(); iter++) { combobox->Append(*iter); }
 
     auto severity_level = app_config->get("log_severity_level");
-    if (!severity_level.empty()) { combobox->SetValue(severity_level); }
+    if (!severity_level.empty()) {
+        // Capitalize first letter for display (config stores lowercase)
+        severity_level[0] = std::toupper(severity_level[0]);
+        combobox->SetValue(severity_level);
+    }
 
     m_sizer_combox->Add(combobox, 0, wxALIGN_CENTER, 0);
 
@@ -1278,6 +1282,8 @@ wxWindow* PreferencesDialog::create_general_page()
     auto title_develop_mode = create_item_title(_L("Develop mode"), page, _L("Develop mode"));
     auto item_develop_mode  = create_item_checkbox(_L("Develop mode"), page, _L("Develop mode"), 50, "developer_mode");
     auto item_skip_ams_blacklist_check  = create_item_checkbox(_L("Skip AMS blacklist check"), page, _L("Skip AMS blacklist check"), 50, "skip_ams_blacklist_check");
+    auto log_level_list = std::vector<wxString>{_L("Fatal"), _L("Error"), _L("Warning"), _L("Info"), _L("Debug"), _L("Trace")};
+    auto item_log_level = create_item_loglevel_combobox(_L("Log Level"), page, _L("Set logging verbosity for diagnostics"), log_level_list);
 
     sizer_page->Add(title_general_settings, 0, wxEXPAND, 0);
     sizer_page->Add(item_language, 0, wxTOP, FromDIP(3));
@@ -1350,6 +1356,7 @@ wxWindow* PreferencesDialog::create_general_page()
     sizer_page->Add(title_develop_mode, 0, wxTOP | wxEXPAND, FromDIP(20));
     sizer_page->Add(item_develop_mode, 0, wxTOP, FromDIP(3));
     sizer_page->Add(item_skip_ams_blacklist_check, 0, wxTOP, FromDIP(3));
+    sizer_page->Add(item_log_level, 0, wxTOP, FromDIP(3));
 
     page->SetSizer(sizer_page);
     page->Layout();
