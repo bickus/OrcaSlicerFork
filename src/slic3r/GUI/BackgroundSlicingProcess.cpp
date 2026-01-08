@@ -713,15 +713,30 @@ StringObjectException BackgroundSlicingProcess::validate(StringObjectException *
 Print::ApplyStatus BackgroundSlicingProcess::apply(const Model &model, const DynamicPrintConfig &config)
 {
 	assert(m_print != nullptr);
+	assert(m_current_plate != nullptr);
 	assert(config.opt_enum<PrinterTechnology>("printer_technology") == m_print->technology());
 	// TODO: add partplate config
 	DynamicPrintConfig new_config = config;
-	new_config.apply(*m_current_plate->config());
+	if (m_current_plate)
+		new_config.apply(*m_current_plate->config());
 
 	// Pass plate layer config ranges to Print (for plate-level height modifiers)
-	if (m_print->technology() == ptFFF) {
-		static_cast<Print*>(m_print)->set_plate_layer_config_ranges(
-			m_current_plate->layer_config_ranges());
+	if (m_print->technology() == ptFFF && m_current_plate) {
+		const auto& plate_ranges = m_current_plate->layer_config_ranges();
+		BOOST_LOG_TRIVIAL(debug) << "[PHM] BackgroundSlicingProcess::apply() - passing " << plate_ranges.size()
+			<< " plate layer config ranges to Print for plate " << m_current_plate->get_index();
+		for (const auto& range : plate_ranges) {
+			BOOST_LOG_TRIVIAL(debug) << "[PHM]   Range [" << range.first.first << ", " << range.first.second << "] with "
+				<< range.second.keys().size() << " config keys:";
+			for (const auto& key : range.second.keys()) {
+				auto opt = range.second.option(key);
+				BOOST_LOG_TRIVIAL(debug) << "[PHM]     " << key << "=" << (opt ? opt->serialize() : "null");
+			}
+		}
+		static_cast<Print*>(m_print)->set_plate_layer_config_ranges(plate_ranges);
+	} else {
+		BOOST_LOG_TRIVIAL(debug) << "[PHM] BackgroundSlicingProcess::apply() - skipping plate layer config ranges "
+			<< "(technology=" << m_print->technology() << ", m_current_plate=" << (m_current_plate ? "set" : "null") << ")";
 	}
 
 	Print::ApplyStatus invalidated = m_print->apply(model, new_config);

@@ -410,6 +410,8 @@ public:
     // Initialize the layer_height_profile from the model_object's layer_height_profile, from model_object's layer height table, or from slicing parameters.
     // Returns true, if the layer_height_profile was changed.
     static bool     update_layer_height_profile(const ModelObject &model_object, const SlicingParameters &slicing_parameters, std::vector<coordf_t> &layer_height_profile);
+    // Overload that also merges plate layer config ranges (plate ranges have lower priority than object ranges)
+    static bool     update_layer_height_profile(const ModelObject &model_object, const SlicingParameters &slicing_parameters, std::vector<coordf_t> &layer_height_profile, const t_layer_config_ranges &plate_layer_ranges);
 
     // Collect the slicing parameters, to be used by variable layer thickness algorithm,
     // by the interactive layer height editor and by the printing process itself.

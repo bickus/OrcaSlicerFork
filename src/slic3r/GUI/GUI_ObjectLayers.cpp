@@ -7,6 +7,7 @@
 #include "libslic3r/Model.hpp"
 #include "GLCanvas3D.hpp"
 #include "Plater.hpp"
+#include "PartPlate.hpp"
 
 #include "Widgets/LabeledStaticBox.hpp"
 
@@ -58,7 +59,11 @@ void ObjectLayers::select_editor(LayerRangeEditor* editor, const bool is_last_ed
     //}    
 }
 
-wxSizer* ObjectLayers::create_layer(const t_layer_height_range& range, PlusMinusButton *delete_button, PlusMinusButton *add_button) 
+// Unified layer creation with callback - the core implementation
+wxSizer* ObjectLayers::create_layer_impl(const t_layer_height_range& range,
+                                         PlusMinusButton *delete_button,
+                                         PlusMinusButton *add_button,
+                                         EditRangeCallback edit_callback)
 {
     const bool is_last_edited_range = range == m_selectable_range;
 
@@ -84,9 +89,8 @@ wxSizer* ObjectLayers::create_layer(const t_layer_height_range& range, PlusMinus
     m_grid_sizer->Add(head_text, 0, wxALIGN_CENTER_VERTICAL);
 
     // Add control for the "Min Z"
-
-    auto editor = new LayerRangeEditor(this, double_to_string(range.first), etMinZ, set_focus_data, 
-        [range, update_focus_data, this, delete_button, add_button](coordf_t min_z, bool enter_pressed, bool dont_update_ui) 
+    auto editor = new LayerRangeEditor(this, double_to_string(range.first), etMinZ, set_focus_data,
+        [range, update_focus_data, this, delete_button, add_button, edit_callback](coordf_t min_z, bool enter_pressed, bool dont_update_ui)
     {
         if (fabs(min_z - range.first) < EPSILON) {
             m_selection_type = etUndef;
@@ -102,7 +106,7 @@ wxSizer* ObjectLayers::create_layer(const t_layer_height_range& range, PlusMinus
             add_button->range = new_range;
         update_focus_data(new_range, etMinZ, enter_pressed);
 
-        return wxGetApp().obj_list()->edit_layer_range(range, new_range, dont_update_ui);
+        return edit_callback(range, new_range, dont_update_ui);
     });
 
     select_editor(editor, is_last_edited_range);
@@ -115,9 +119,8 @@ wxSizer* ObjectLayers::create_layer(const t_layer_height_range& range, PlusMinus
     m_grid_sizer->Add(middle_text, 0, wxALIGN_CENTER_VERTICAL);
 
     // Add control for the "Max Z"
-
-    editor = new LayerRangeEditor(this, double_to_string(range.second), etMaxZ, set_focus_data, 
-        [range, update_focus_data, this, delete_button, add_button](coordf_t max_z, bool enter_pressed, bool dont_update_ui)
+    editor = new LayerRangeEditor(this, double_to_string(range.second), etMaxZ, set_focus_data,
+        [range, update_focus_data, this, delete_button, add_button, edit_callback](coordf_t max_z, bool enter_pressed, bool dont_update_ui)
     {
         if (fabs(max_z - range.second) < EPSILON || range.first > max_z) {
             m_selection_type = etUndef;
@@ -132,10 +135,9 @@ wxSizer* ObjectLayers::create_layer(const t_layer_height_range& range, PlusMinus
             add_button->range = new_range;
         update_focus_data(new_range, etMaxZ, enter_pressed);
 
-        return wxGetApp().obj_list()->edit_layer_range(range, new_range, dont_update_ui);
+        return edit_callback(range, new_range, dont_update_ui);
     });
 
-    //select_editor(editor, is_last_edited_range);
     m_grid_sizer->Add(editor, 1, wxEXPAND);
 
     auto sizer2 = new wxBoxSizer(wxHORIZONTAL);
@@ -146,60 +148,104 @@ wxSizer* ObjectLayers::create_layer(const t_layer_height_range& range, PlusMinus
 
     m_grid_sizer->Add(sizer2, 0, wxALIGN_CENTER_VERTICAL);
 
-    // BBS
-    // Add control for the "Layer height"
-
-    //editor = new LayerRangeEditor(this, double_to_string(m_object->layer_config_ranges[range].option("layer_height")->getFloat()), etLayerHeight, set_focus_data,
-    //    [range](coordf_t layer_height, bool, bool)
-    //{
-    //    return wxGetApp().obj_list()->edit_layer_range(range, layer_height);
-    //});
-
-    //select_editor(editor, is_last_edited_range);
-
-    //auto sizer = new wxBoxSizer(wxHORIZONTAL);
-    //sizer->Add(editor);
-
-    //auto temp = new wxStaticText(m_parent, wxID_ANY, "mm");
-    //temp->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    //temp->SetFont(wxGetApp().normal_font());
-    //sizer->Add(temp, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, wxGetApp().em_unit());
-
-    //m_grid_sizer->Add(sizer);
-
     return sizer2;
 }
-    
-void ObjectLayers::create_layers_list()
+
+// Convenience wrapper for object layers
+wxSizer* ObjectLayers::create_layer(const t_layer_height_range& range, PlusMinusButton *delete_button, PlusMinusButton *add_button)
 {
-    for (const auto &layer : m_object->layer_config_ranges) {
+    return create_layer_impl(range, delete_button, add_button,
+        [](const t_layer_height_range& old_range, const t_layer_height_range& new_range, bool dont_update_ui) {
+            return wxGetApp().obj_list()->edit_layer_range(old_range, new_range, dont_update_ui);
+        });
+}
+    
+// Unified layer list creation with callbacks - the core implementation
+void ObjectLayers::create_layers_list_impl(const t_layer_config_ranges& ranges,
+                                           DeleteRangeCallback del_callback,
+                                           AddRangeCallback add_callback,
+                                           CanAddRangeCallback can_add_callback,
+                                           EditRangeCallback edit_callback)
+{
+    for (const auto &layer : ranges) {
         const t_layer_height_range& range = layer.first;
-        auto del_btn = new PlusMinusButton(m_og->ctrl_parent(), m_bmp_delete, range); 
+        auto del_btn = new PlusMinusButton(m_og->ctrl_parent(), m_bmp_delete, range);
         del_btn->DisableFocusFromKeyboard();
         del_btn->SetBackgroundColour(m_parent->GetBackgroundColour());
         del_btn->SetToolTip(_L("Remove height range"));
 
-        auto add_btn = new PlusMinusButton(m_og->ctrl_parent(), m_bmp_add, range); 
+        auto add_btn = new PlusMinusButton(m_og->ctrl_parent(), m_bmp_add, range);
         add_btn->DisableFocusFromKeyboard();
         add_btn->SetBackgroundColour(m_parent->GetBackgroundColour());
-        wxString tooltip = wxGetApp().obj_list()->can_add_new_range_after_current(range);
+        wxString tooltip = can_add_callback(range);
         add_btn->SetToolTip(tooltip.IsEmpty() ? _L("Add height range") : tooltip);
         add_btn->Enable(tooltip.IsEmpty());
 
-        auto sizer = create_layer(range, del_btn, add_btn);
+        auto sizer = create_layer_impl(range, del_btn, add_btn, edit_callback);
         auto b_sizer = new wxBoxSizer(wxHORIZONTAL);
         b_sizer->Add(del_btn, 0, wxRIGHT | wxLEFT, em_unit(m_parent));
         b_sizer->Add(add_btn);
-        sizer->Add(b_sizer, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, m_parent->FromDIP(1)); // aligns +/- buttons vertically since we got 1px gap on bottom of icons
+        sizer->Add(b_sizer, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, m_parent->FromDIP(1));
 
-        del_btn->Bind(wxEVT_BUTTON, [del_btn](wxEvent &) {
-            wxGetApp().obj_list()->del_layer_range(del_btn->range);
+        del_btn->Bind(wxEVT_BUTTON, [del_btn, del_callback](wxEvent &) {
+            del_callback(del_btn->range);
         });
 
-        add_btn->Bind(wxEVT_BUTTON, [add_btn](wxEvent &) {
-            wxGetApp().obj_list()->add_layer_range_after_current(add_btn->range);
+        add_btn->Bind(wxEVT_BUTTON, [add_btn, add_callback](wxEvent &) {
+            add_callback(add_btn->range);
         });
     }
+}
+
+// Convenience wrapper for object layers
+void ObjectLayers::create_layers_list()
+{
+    create_layers_list_impl(
+        m_object->layer_config_ranges,
+        [](const t_layer_height_range& range) {
+            wxGetApp().obj_list()->del_layer_range(range);
+        },
+        [](const t_layer_height_range& range) {
+            wxGetApp().obj_list()->add_layer_range_after_current(range);
+        },
+        [](const t_layer_height_range& range) {
+            return wxGetApp().obj_list()->can_add_new_range_after_current(range);
+        },
+        [](const t_layer_height_range& old_range, const t_layer_height_range& new_range, bool dont_update_ui) {
+            return wxGetApp().obj_list()->edit_layer_range(old_range, new_range, dont_update_ui);
+        }
+    );
+}
+
+// Convenience wrapper for plate layers
+void ObjectLayers::create_plate_layers_list()
+{
+    if (!m_plate) return;
+
+    create_layers_list_impl(
+        m_plate->layer_config_ranges(),
+        [](const t_layer_height_range& range) {
+            wxGetApp().obj_list()->del_plate_layer_range(range);
+        },
+        [](const t_layer_height_range& range) {
+            wxGetApp().obj_list()->add_plate_layer_range_after_current(range);
+        },
+        [](const t_layer_height_range& range) {
+            return wxGetApp().obj_list()->can_add_new_plate_range_after_current(range);
+        },
+        [](const t_layer_height_range& old_range, const t_layer_height_range& new_range, bool dont_update_ui) {
+            return wxGetApp().obj_list()->edit_plate_layer_range(old_range, new_range, dont_update_ui);
+        }
+    );
+}
+
+// Convenience wrapper for plate layers
+wxSizer* ObjectLayers::create_plate_layer(const t_layer_height_range& range, PlusMinusButton *delete_button, PlusMinusButton *add_button)
+{
+    return create_layer_impl(range, delete_button, add_button,
+        [](const t_layer_height_range& old_range, const t_layer_height_range& new_range, bool dont_update_ui) {
+            return wxGetApp().obj_list()->edit_plate_layer_range(old_range, new_range, dont_update_ui);
+        });
 }
 
 void ObjectLayers::update_layers_list()
@@ -210,14 +256,27 @@ void ObjectLayers::update_layers_list()
     const auto item = objects_ctrl->GetSelection();
     if (!item) return;
 
-    const int obj_idx = objects_ctrl->get_selected_obj_idx();
-    if (obj_idx < 0) return;
-
     const ItemType type = objects_ctrl->GetModel()->GetItemType(item);
     if (!(type & (itLayerRoot | itLayer))) return;
 
-    m_object = objects_ctrl->object(obj_idx);
-    if (!m_object || m_object->layer_config_ranges.empty()) return;
+    // Check if this is a plate layer
+    m_is_plate_layer = objects_ctrl->GetModel()->IsPlateLayerRoot(item) ||
+                       objects_ctrl->GetModel()->IsPlateLayer(item);
+
+    if (m_is_plate_layer) {
+        // Plate layer mode
+        m_plate = objects_ctrl->GetModel()->GetPlateFromLayerItem(item);
+        m_object = nullptr;
+        if (!m_plate || m_plate->layer_config_ranges().empty()) return;
+    } else {
+        // Object layer mode
+        const int obj_idx = objects_ctrl->get_selected_obj_idx();
+        if (obj_idx < 0) return;
+
+        m_object = objects_ctrl->object(obj_idx);
+        m_plate = nullptr;
+        if (!m_object || m_object->layer_config_ranges.empty()) return;
+    }
 
     auto range = objects_ctrl->GetModel()->GetLayerRangeByItem(item);
 
@@ -229,12 +288,19 @@ void ObjectLayers::update_layers_list()
         // Delete all controls from options group
         m_grid_sizer->Clear(true);
 
-        // Add new control according to the selected item  
+        // Add new control according to the selected item
 
-        if (type & itLayerRoot)
-            create_layers_list();
-        else
-            create_layer(range, nullptr, nullptr);
+        if (m_is_plate_layer) {
+            if (type & itLayerRoot)
+                create_plate_layers_list();
+            else
+                create_plate_layer(range, nullptr, nullptr);
+        } else {
+            if (type & itLayerRoot)
+                create_layers_list();
+            else
+                create_layer(range, nullptr, nullptr);
+        }
 
         m_og->ctrl_parent()->Thaw();
 

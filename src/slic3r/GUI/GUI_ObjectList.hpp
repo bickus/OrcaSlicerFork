@@ -384,6 +384,21 @@ public:
                           // Don't destroy the panel with the "add layer" or "remove layer" buttons.
                           bool suppress_ui_update = false);
 
+    // Plate layer editing support
+    void                plate_layers_editing();
+    wxDataViewItem      add_plate_layer_root_item(const wxDataViewItem plate_item);
+    void                del_plate_layer_range(const t_layer_height_range& range);
+    void                add_plate_layer_range_after_current(const t_layer_height_range current_range);
+    wxString            can_add_new_plate_range_after_current(t_layer_height_range current_range);
+    void                add_plate_layer_item(const t_layer_height_range& range,
+                                             const wxDataViewItem layers_item,
+                                             const int layer_idx = -1);
+    bool                edit_plate_layer_range(const t_layer_height_range& range,
+                                               const t_layer_height_range& new_range,
+                                               bool suppress_ui_update = false);
+    // Helper to trigger re-slice after plate layer config changes
+    void                notify_plate_layer_changed(PartPlate* plate);
+
     void init();
     bool multiple_selection() const ;
     bool is_selected(const ItemType type) const;

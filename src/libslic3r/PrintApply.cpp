@@ -367,10 +367,14 @@ public:
     }
 
     // Find the config for a specific Z position (useful for plate layer ranges where boundaries may not align with object ranges)
+    // Uses half-open interval [start, end) - z must be >= start but strictly < end
     const DynamicPrintConfig* config_at_z(coordf_t z) const {
         for (const auto& range : m_ranges) {
+            // Use EPSILON tolerance for lower bound (inclusive) to handle floating point imprecision
+            // Use strict less-than for upper bound (exclusive) - NO epsilon, so boundary goes to next range
+            // Example: range (5,10) should match z=5,5.001,...,9.999 but NOT z=10
             if (z >= range.layer_height_range.first - EPSILON &&
-                z < range.layer_height_range.second + EPSILON) {
+                z < range.layer_height_range.second) {
                 return range.config;
             }
         }
@@ -380,6 +384,13 @@ public:
     std::vector<LayerRange>::const_iterator begin() const { return m_ranges.cbegin(); }
     std::vector<LayerRange>::const_iterator end  () const { return m_ranges.cend(); }
     size_t                                  size () const { return m_ranges.size(); }
+    // Returns true if there are no actual config overrides (only filler ranges with config=nullptr)
+    bool                                    empty() const {
+        for (const auto& range : m_ranges)
+            if (range.config != nullptr)
+                return false;
+        return true;
+    }
 
 private:
     // Layer ranges with their config overrides and list of volumes with their snug bounding boxes in a given layer range.
@@ -718,12 +729,52 @@ int  print_region_ref_cnt(const PrintRegion &r) { return r.m_ref_cnt; }
 bool verify_update_print_object_regions(
     ModelVolumePtrs                     model_volumes,
     const PrintRegionConfig            &default_region_config,
+    const LayerRanges                  &plate_layer_ranges,  // Plate-level height modifiers
     size_t                              num_extruders,
     PrintObjectRegions                 &print_object_regions,
     const std::function<void(const PrintRegionConfig&, const PrintRegionConfig&, const t_config_option_keys&)> &callback_invalidate)
 {
     // Sort by ModelVolume ID.
     model_volumes_sort_by_id(model_volumes);
+
+    // Check if plate layer ranges introduce new boundaries not present in current layer_ranges.
+    // If so, we need to regenerate regions from scratch to properly split at those boundaries.
+    if (!plate_layer_ranges.empty()) {
+        // Collect existing boundaries from current layer ranges
+        std::set<coordf_t> existing_boundaries;
+        for (const auto& lr : print_object_regions.layer_ranges) {
+            existing_boundaries.insert(lr.layer_height_range.first);
+            if (lr.layer_height_range.second < DBL_MAX / 2)
+                existing_boundaries.insert(lr.layer_height_range.second);
+        }
+        // Check if plate layer ranges introduce any new boundaries
+        for (const auto& range : plate_layer_ranges) {
+            coordf_t start = range.layer_height_range.first;
+            coordf_t end = range.layer_height_range.second;
+            // Check if start boundary exists (with epsilon tolerance)
+            bool start_found = false;
+            for (coordf_t b : existing_boundaries) {
+                if (std::abs(b - start) < EPSILON) {
+                    start_found = true;
+                    break;
+                }
+            }
+            if (!start_found)
+                return false;  // New boundary needed, must regenerate
+            // Check if end boundary exists (skip DBL_MAX)
+            if (end < DBL_MAX / 2) {
+                bool end_found = false;
+                for (coordf_t b : existing_boundaries) {
+                    if (std::abs(b - end) < EPSILON) {
+                        end_found = true;
+                        break;
+                    }
+                }
+                if (!end_found)
+                    return false;  // New boundary needed, must regenerate
+            }
+        }
+    }
 
     for (std::unique_ptr<PrintRegion> &region : print_object_regions.all_regions)
         print_region_ref_reset(*region);
@@ -772,8 +823,11 @@ bool verify_update_print_object_regions(
                         }
                     }
                 }
+                // Get plate layer config at this Z height for model parts
+                const DynamicPrintConfig* plate_config = region.parent == -1 ?
+                    plate_layer_ranges.config_at_z(layer_range.layer_height_range.first) : nullptr;
                 PrintRegionConfig cfg = region.parent == -1 ?
-                    region_config_from_model_volume(default_region_config, nullptr, layer_range.config, **it_model_volume, num_extruders) :
+                    region_config_from_model_volume(default_region_config, plate_config, layer_range.config, **it_model_volume, num_extruders) :
                     region_config_from_model_volume(layer_range.volume_regions[region.parent].region->config(), nullptr, nullptr, **it_model_volume, num_extruders);
                 if (cfg != region.region->config()) {
                     // Region configuration changed.
@@ -907,8 +961,14 @@ void update_volume_bboxes(
             r.second += EPSILON;
             ranges.emplace_back(r);
         }
+        BOOST_LOG_TRIVIAL(debug) << "[PHM] update_volume_bboxes: processing " << model_volumes.size() << " volumes with " << layer_ranges.size() << " layer_ranges";
+        for (size_t ri = 0; ri < ranges.size(); ++ri) {
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]   range[" << ri << "]: [" << ranges[ri].first << ", " << ranges[ri].second << "]";
+        }
         for (const ModelVolume *model_volume : model_volumes)
             if (model_volume_solid_or_modifier(*model_volume)) {
+                BOOST_LOG_TRIVIAL(debug) << "[PHM]   Volume: " << model_volume->name << " id=" << model_volume->id().id
+                    << " cached=" << (std::binary_search(cached_volume_ids.begin(), cached_volume_ids.end(), model_volume->id()) ? "yes" : "no");
                 if (std::binary_search(cached_volume_ids.begin(), cached_volume_ids.end(), model_volume->id())) {
                     for (PrintObjectRegions::LayerRangeRegions &layer_range : layer_ranges) {
                         const auto &vold = volumes_old[&layer_range - layer_ranges.data()];
@@ -917,10 +977,21 @@ void update_volume_bboxes(
                             layer_range.volumes.emplace_back(*it);
                     }
                 } else {
+                    // Get mesh bbox in z for debugging
+                    BoundingBoxf3 mesh_bbox = model_volume->mesh().bounding_box();
+                    Transform3d trafo_d = object_trafo.cast<double>() * model_volume->get_matrix();
+                    Vec3d mesh_min = trafo_d * mesh_bbox.min.cast<double>();
+                    Vec3d mesh_max = trafo_d * mesh_bbox.max.cast<double>();
+                    BOOST_LOG_TRIVIAL(debug) << "[PHM]     Mesh transformed z-range: [" << std::min(mesh_min.z(), mesh_max.z()) << ", " << std::max(mesh_min.z(), mesh_max.z()) << "]";
+
                     transformed_its_bboxes_in_z_ranges(model_volume->mesh().its, trafo_for_bbox(object_trafo, model_volume->get_matrix()), ranges, bboxes, offset);
-                    for (PrintObjectRegions::LayerRangeRegions &layer_range : layer_ranges)
-                        if (auto &bbox = bboxes[&layer_range - layer_ranges.data()]; bbox.second)
+                    for (size_t i = 0; i < layer_ranges.size(); ++i) {
+                        PrintObjectRegions::LayerRangeRegions &layer_range = layer_ranges[i];
+                        auto &bbox = bboxes[i];
+                        BOOST_LOG_TRIVIAL(debug) << "[PHM]     range[" << i << "] bbox.second=" << (bbox.second ? "true" : "false");
+                        if (bbox.second)
                             layer_range.volumes.push_back({ model_volume->id(), bbox.first });
+                    }
                 }
             }
     }
@@ -946,6 +1017,17 @@ static PrintObjectRegions* generate_print_object_regions(
     const std::vector<unsigned int>             &painting_extruders,
     const bool                                   has_painted_fuzzy_skin)
 {
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] generate_print_object_regions() called";
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   model_volumes.size()=" << model_volumes.size()
+        << ", model_layer_ranges.size()=" << model_layer_ranges.size()
+        << ", plate_layer_ranges.size()=" << plate_layer_ranges.size();
+    for (const auto& r : model_layer_ranges) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   model_layer_range: [" << r.layer_height_range.first << ", " << r.layer_height_range.second << "]";
+    }
+    for (const auto& r : plate_layer_ranges) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   plate_layer_range: [" << r.layer_height_range.first << ", " << r.layer_height_range.second << "]";
+    }
+
     // Reuse the old object or generate a new one.
     auto out = print_object_regions_old ? std::unique_ptr<PrintObjectRegions>(print_object_regions_old) : std::make_unique<PrintObjectRegions>();
     auto &all_regions          = out->all_regions;
@@ -993,6 +1075,11 @@ static PrintObjectRegions* generate_print_object_regions(
         merged_ranges.push_back({ t_layer_height_range(last_z, DBL_MAX), object_config });
     }
 
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   merged_ranges.size()=" << merged_ranges.size();
+    for (const auto& r : merged_ranges) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   merged_range: [" << r.layer_height_range.first << ", " << r.layer_height_range.second << "]";
+    }
+
     // Cannot reuse old if boundaries changed due to plate modifiers
     bool can_reuse = reuse_old && merged_ranges.size() == layer_ranges_regions.size();
     if (can_reuse) {
@@ -1021,6 +1108,9 @@ static PrintObjectRegions* generate_print_object_regions(
         layer_ranges_regions.reserve(merged_ranges.size());
         for (const auto &range : merged_ranges)
             layer_ranges_regions.push_back({ range.layer_height_range, range.config });
+        // Clear cached volume IDs since layer ranges structure changed - volumes need to be re-processed
+        out->cached_volume_ids.clear();
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Layer ranges rebuilt - cleared cached_volume_ids";
     }
 
     const bool is_mm_painted = num_extruders > 1 && std::any_of(model_volumes.cbegin(), model_volumes.cend(), [](const ModelVolume *mv) { return mv->is_mm_painted(); });
@@ -1686,6 +1776,7 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                 verify_update_print_object_regions(
                     print_object.model_object()->volumes,
                     m_default_region_config,
+                    LayerRanges(m_plate_layer_config_ranges),  // Pass plate layer ranges for proper comparison
                     num_extruders,
                     *print_object_regions,
                     [it_print_object, it_print_object_end, &update_apply_status](const PrintRegionConfig &old_config, const PrintRegionConfig &new_config, const t_config_option_keys &diff_keys) {

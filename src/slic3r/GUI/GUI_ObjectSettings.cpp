@@ -8,6 +8,7 @@
 #include "GUI_App.hpp"
 #include "wxExtensions.hpp"
 #include "Plater.hpp"
+#include "PartPlate.hpp"
 #include "libslic3r/PresetBundle.hpp"
 #include "libslic3r/Model.hpp"
 
@@ -226,8 +227,30 @@ bool ObjectSettings::update_settings_list()
             break;
         }
 
+        // Check for plate layers early - they don't have an associated object
+        if (type == itLayer && objects_model->IsPlateLayer(item)) {
+            is_layer_range_settings = true;
+            PartPlate* plate = objects_model->GetPlateFromLayerItem(item);
+            if (plate) {
+                t_layer_height_range height_range = objects_model->GetLayerRangeByItem(item);
+                auto& plate_layer_ranges = plate->layer_config_ranges();
+                if (plate_layer_ranges.find(height_range) != plate_layer_ranges.end()) {
+                    plate_configs.emplace(plate, &cfg);
+                    object_configs.emplace((ObjectBase*)(&plate_layer_ranges.at(height_range)), &plate_layer_ranges.at(height_range));
+                }
+            }
+            continue;
+        }
+
+        // Check for plate layer root - also has no associated object
+        if (type == itLayerRoot && objects_model->IsPlateLayerRoot(item)) {
+            is_layer_root = true;
+            continue;
+        }
+
         const int obj_idx = objects_model->GetObjectIdByItem(item);
-        assert(obj_idx >= 0);
+        if (obj_idx < 0)
+            continue;  // Safety check - should not happen for valid object items
         auto object = wxGetApp().model().objects[obj_idx];
         if (type == itObject) {
             is_object_settings = true;
@@ -246,6 +269,7 @@ bool ObjectSettings::update_settings_list()
             object_configs.emplace(volume, &volume->config);
         }
         else if(type == itLayer){
+            // Plate layers are handled earlier with continue, so this is an object layer
             is_layer_range_settings = true;
             if (parent_object && parent_object != object)
                 return false;
@@ -288,7 +312,11 @@ bool ObjectSettings::update_settings_list()
     }
     else if (is_layer_range_settings) {
         tab_plate->set_model_config(plate_configs);
-        tab_object->set_model_config({ {parent_object, &parent_object->config} });
+        // For plate layers, parent_object is nullptr - pass empty config
+        if (parent_object)
+            tab_object->set_model_config({ {parent_object, &parent_object->config} });
+        else
+            tab_object->set_model_config({});
         tab_volume->set_model_config({});
         tab_layer->set_model_config(object_configs);
         //m_tab_active = tab_layer;

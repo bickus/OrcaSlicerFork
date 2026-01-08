@@ -2876,24 +2876,40 @@ void TabPrintModel::on_value_change(const std::string& opt_key, const boost::any
 {
     // TODO: support opt_index, translate by OptionsGroup's m_opt_map
     auto k = opt_key;
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] TabPrintModel::on_value_change() called with opt_key=" << opt_key
+                             << " m_object_configs.size()=" << m_object_configs.size();
     if (m_config_manipulation.is_applying()) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   m_config_manipulation.is_applying() - calling parent and returning";
         TabPrint::on_value_change(opt_key, value);
         return;
     }
-    if (!has_key(k))
+    if (!has_key(k)) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   !has_key(" << k << ") - returning early";
         return;
+    }
     if (!m_object_configs.empty())
         wxGetApp().plater()->take_snapshot((boost::format("Change Option %s") % k).str());
     auto inull = std::find(m_null_keys.begin(), m_null_keys.end(), k);
     // always add object config
     bool set   = true; // *m_config->option(k) != *m_prints.get_selected_preset().config.option(k) || inull != m_null_keys.end();
     if (m_back_to_sys) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   m_back_to_sys - erasing key from configs";
         for (auto config : m_object_configs)
             config.second->erase(k);
         m_all_keys.erase(std::remove(m_all_keys.begin(), m_all_keys.end(), k), m_all_keys.end());
     } else if (set) {
-        for (auto config : m_object_configs)
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Applying " << k << " to " << m_object_configs.size() << " object configs";
+        for (auto config : m_object_configs) {
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]     Before apply: config has " << k << "=" << (config.second->has(k) ? "yes" : "no");
             config.second->apply_only(*m_config, {k});
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]     After apply: config has " << k << "=" << (config.second->has(k) ? "yes" : "no");
+            if (config.second->has(k)) {
+                auto opt = config.second->option(k);
+                if (opt) {
+                    BOOST_LOG_TRIVIAL(debug) << "[PHM]     Value: " << opt->serialize();
+                }
+            }
+        }
         m_all_keys = concat(m_all_keys, {k});
     }
     if (inull != m_null_keys.end())
@@ -2901,11 +2917,13 @@ void TabPrintModel::on_value_change(const std::string& opt_key, const boost::any
     if (m_back_to_sys || set) update_changed_ui();
     m_back_to_sys = false;
     TabPrint::on_value_change(k, value);
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Calling notify_changed for " << m_object_configs.size() << " configs";
     for (auto config : m_object_configs) {
         config.second->touch();
         notify_changed(config.first);
     }
     wxGetApp().params_panel()->notify_object_config_changed();
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   TabPrintModel::on_value_change() completed";
 }
 
 void TabPrintModel::reload_config()
@@ -3189,7 +3207,13 @@ TabPrintLayer::TabPrintLayer(ParamsPanel* parent) :
 
 void TabPrintLayer::notify_changed(ObjectBase * object)
 {
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] TabPrintLayer::notify_changed() called with " << m_object_configs.size() << " object configs";
     for (auto config : m_object_configs) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Config keys: ";
+        for (const auto& key : config.second->keys()) {
+            auto opt = config.second->option(key);
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]     " << key << "=" << (opt ? opt->serialize() : "null");
+        }
         if (!config.second->has(layer_height)) {
             auto option = m_parent_tab->get_config()->option(layer_height);
             config.second->set_key_value(layer_height, option->clone());
@@ -3200,6 +3224,21 @@ void TabPrintLayer::notify_changed(ObjectBase * object)
         for (auto item : items)
             objects_list->add_settings_item(item, &config.second->get());
     }
+
+    // Trigger re-slice when layer config changes
+    // Note: This is called for BOTH object layers and plate layers
+    // For object layers, changed_object() is already called elsewhere
+    // For plate layers, we need to manually trigger the re-slice
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Invalidating slice result and scheduling background process";
+    PartPlate* plate = wxGetApp().plater()->get_partplate_list().get_curr_plate();
+    if (plate)
+        plate->update_slice_result_valid_state(false);
+    // Reset gcode toolpaths to clear the old preview immediately
+    // This must be done BEFORE update() which reloads the preview
+    wxGetApp().plater()->reset_gcode_toolpaths();
+    wxGetApp().plater()->update();
+    wxGetApp().plater()->schedule_background_process();
+    wxGetApp().mainframe->update_slice_print_status(MainFrame::eEventSliceUpdate, true, false);
 }
 
 void TabPrintLayer::update_custom_dirty()

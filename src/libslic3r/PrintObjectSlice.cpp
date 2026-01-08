@@ -788,16 +788,77 @@ void groupingVolumesForBrim(PrintObject* object, LayerPtrs& layers, int firstLay
 // Resulting expolygons of layer regions are marked as Internal.
 void PrintObject::slice()
 {
-    if (! this->set_started(posSlice))
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] PrintObject::slice() START for object: " << this->model_object()->name;
+
+    if (! this->set_started(posSlice)) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM] PrintObject::slice() - posSlice already started, returning early";
         return;
+    }
     //BBS: add flag to reload scene for shell rendering
     m_print->set_status(5, L("Slicing mesh"), PrintBase::SlicingStatus::RELOAD_SCENE);
     std::vector<coordf_t> layer_height_profile;
-    this->update_layer_height_profile(*this->model_object(), m_slicing_params, layer_height_profile);
+
+    // Log slicing parameters
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Slicing params: layer_height=" << m_slicing_params.layer_height
+        << ", first_object_layer_height=" << m_slicing_params.first_object_layer_height
+        << ", object_print_z_height=" << m_slicing_params.object_print_z_height()
+        << ", object_print_z_min=" << m_slicing_params.object_print_z_min
+        << ", object_print_z_max=" << m_slicing_params.object_print_z_max
+        << ", valid=" << (m_slicing_params.valid ? "true" : "false");
+
+    // Log object's own layer config ranges
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Object layer_config_ranges count: " << this->model_object()->layer_config_ranges.size();
+    for (const auto& range : this->model_object()->layer_config_ranges) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]     Object range [" << range.first.first << ", " << range.first.second << "]"
+            << " layer_height=" << (range.second.has("layer_height") ?
+                std::to_string(range.second.option("layer_height")->getFloat()) : "NOT SET");
+    }
+
+    // Get plate layer config ranges if available
+    const Print* print = dynamic_cast<const Print*>(m_print);
+    if (print && !print->plate_layer_config_ranges().empty()) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Using plate layer config ranges (count=" << print->plate_layer_config_ranges().size() << ")";
+        for (const auto& range : print->plate_layer_config_ranges()) {
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]     Plate range [" << range.first.first << ", " << range.first.second << "]"
+                << " layer_height=" << (range.second.has("layer_height") ?
+                    std::to_string(range.second.option("layer_height")->getFloat()) : "NOT SET");
+        }
+        // Use overload that merges plate and object layer config ranges
+        this->update_layer_height_profile(*this->model_object(), m_slicing_params, layer_height_profile, print->plate_layer_config_ranges());
+    } else {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   No plate layer ranges (print=" << (print ? "valid" : "null")
+            << ", empty=" << (print ? (print->plate_layer_config_ranges().empty() ? "true" : "false") : "N/A") << ")";
+        // No plate layer ranges, use original behavior
+        this->update_layer_height_profile(*this->model_object(), m_slicing_params, layer_height_profile);
+    }
+
+    // Log the generated layer height profile
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Generated layer_height_profile size: " << layer_height_profile.size();
+    if (layer_height_profile.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << "[PHM]   WARNING: layer_height_profile is EMPTY!";
+    } else {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   layer_height_profile first entry: z=" << layer_height_profile[0]
+            << ", h=" << (layer_height_profile.size() > 1 ? layer_height_profile[1] : 0);
+        if (layer_height_profile.size() >= 2) {
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]   layer_height_profile last entry: z=" << layer_height_profile[layer_height_profile.size() - 2]
+                << ", h=" << layer_height_profile[layer_height_profile.size() - 1];
+        }
+    }
+
     m_print->throw_if_canceled();
     m_typed_slices = false;
     this->clear_layers();
-    m_layers = new_layers(this, generate_object_layers(m_slicing_params, layer_height_profile, m_config.precise_z_height.value));
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Calling generate_object_layers() with precise_z_height=" << m_config.precise_z_height.value;
+    auto object_layers = generate_object_layers(m_slicing_params, layer_height_profile, m_config.precise_z_height.value);
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   generate_object_layers() returned " << object_layers.size() << " layer boundaries (pairs)";
+    if (object_layers.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << "[PHM]   WARNING: generate_object_layers() returned EMPTY result!";
+    }
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Calling new_layers() with " << (object_layers.size() / 2) << " layers";
+    m_layers = new_layers(this, object_layers);
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   new_layers() created " << m_layers.size() << " layers";
     this->slice_volumes();
     m_print->throw_if_canceled();
     int firstLayerReplacedBy = 0;
@@ -835,8 +896,16 @@ void PrintObject::slice()
                 layer.backup_untyped_slices();
             }
         });
-    if (m_layers.empty())
+    if (m_layers.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "[PHM] PrintObject::slice() FAILED - no layers detected for object: " << this->model_object()->name;
+        BOOST_LOG_TRIVIAL(error) << "[PHM]   Final state: layer_height_profile.size()=" << layer_height_profile.size()
+            << ", m_slicing_params.valid=" << (m_slicing_params.valid ? "true" : "false")
+            << ", object_print_z_height=" << m_slicing_params.object_print_z_height();
         throw Slic3r::SlicingError(L("No layers were detected. You might want to repair your STL file(s) or check their size or thickness and retry.\n"));
+    }
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] PrintObject::slice() COMPLETED for object: " << this->model_object()->name
+        << " with " << m_layers.size() << " layers";
 
     // BBS
     this->set_done(posSlice);
@@ -1138,11 +1207,32 @@ void PrintObject::slice_volumes()
     }
 
     std::vector<float>                   slice_zs      = zs_from_layers(m_layers);
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   slice_zs count: " << slice_zs.size();
+    if (!slice_zs.empty()) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   slice_zs range: [" << slice_zs.front() << ", " << slice_zs.back() << "]";
+    }
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   m_shared_regions->layer_ranges count: " << m_shared_regions->layer_ranges.size();
+    for (size_t i = 0; i < m_shared_regions->layer_ranges.size(); ++i) {
+        const auto& lr = m_shared_regions->layer_ranges[i];
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]     layer_range[" << i << "]: [" << lr.layer_height_range.first
+            << ", " << lr.layer_height_range.second << "] volumes: " << lr.volume_regions.size();
+        for (const auto& vr : lr.volume_regions) {
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]       volume: " << vr.model_volume->name
+                << " id=" << vr.model_volume->id().id;
+        }
+    }
     std::vector<VolumeSlices> objSliceByVolume;
     if (!slice_zs.empty()) {
         objSliceByVolume = slice_volumes_inner(
             print->config(), this->config(), this->trafo_centered(),
             this->model_object()->volumes, m_shared_regions->layer_ranges, slice_zs, throw_on_cancel_callback);
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   slice_volumes_inner returned " << objSliceByVolume.size() << " volume slices";
+        for (const auto& vs : objSliceByVolume) {
+            size_t non_empty = 0;
+            for (const auto& s : vs.slices) if (!s.empty()) ++non_empty;
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]     volume_id=" << vs.volume_id.id
+                << " total_slices=" << vs.slices.size() << " non_empty=" << non_empty;
+        }
     }
 
     //BBS: "model_part" volumes are grouded according to their connections
@@ -1156,8 +1246,12 @@ void PrintObject::slice_volumes()
         slices_to_regions(print->config(), *this, this->model_object()->volumes, *m_shared_regions, slice_zs,
                           std::move(objSliceByVolume), PrintObject::clip_multipart_objects, throw_on_cancel_callback);
 
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   slices_to_regions returned " << region_slices.size() << " regions";
     for (size_t region_id = 0; region_id < region_slices.size(); ++ region_id) {
         std::vector<ExPolygons> &by_layer = region_slices[region_id];
+        size_t non_empty_layers = 0;
+        for (const auto& layer_slices : by_layer) if (!layer_slices.empty()) ++non_empty_layers;
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]     region[" << region_id << "]: layers=" << by_layer.size() << " non_empty=" << non_empty_layers;
         for (size_t layer_id = 0; layer_id < by_layer.size(); ++ layer_id)
             m_layers[layer_id]->regions()[region_id]->slices.append(std::move(by_layer[layer_id]), stInternal);
     }

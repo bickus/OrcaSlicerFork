@@ -76,29 +76,83 @@ void Print::clear()
 // Helper to compare t_layer_config_ranges (ModelConfig doesn't have operator==)
 static bool layer_config_ranges_equal(const t_layer_config_ranges& a, const t_layer_config_ranges& b)
 {
-    if (a.size() != b.size())
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] layer_config_ranges_equal() comparing " << a.size() << " vs " << b.size() << " ranges";
+    if (a.size() != b.size()) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Size mismatch - returning false";
         return false;
+    }
     auto it_b = b.begin();
     for (const auto& [range_a, config_a] : a) {
         const auto& [range_b, config_b] = *it_b++;
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Comparing range [" << range_a.first << ", " << range_a.second << "] vs ["
+            << range_b.first << ", " << range_b.second << "]";
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]     config_a keys (" << config_a.keys().size() << "): ";
+        for (const auto& k : config_a.keys()) {
+            auto opt = config_a.option(k);
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]       " << k << "=" << (opt ? opt->serialize() : "null");
+        }
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]     config_b keys (" << config_b.keys().size() << "): ";
+        for (const auto& k : config_b.keys()) {
+            auto opt = config_b.option(k);
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]       " << k << "=" << (opt ? opt->serialize() : "null");
+        }
         // Compare ranges
         if (std::abs(range_a.first - range_b.first) > EPSILON ||
-            std::abs(range_a.second - range_b.second) > EPSILON)
+            std::abs(range_a.second - range_b.second) > EPSILON) {
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]   Range values mismatch - returning false";
             return false;
-        // Compare configs via their underlying DynamicPrintConfig
-        if (config_a.get() != config_b.get())
+        }
+        // First check if both configs have the same keys
+        // DynamicConfig::equals() ignores options not present in both configs,
+        // so we need to explicitly check that the key sets match
+        auto keys_a = config_a.keys();
+        auto keys_b = config_b.keys();
+        std::sort(keys_a.begin(), keys_a.end());
+        std::sort(keys_b.begin(), keys_b.end());
+        if (keys_a != keys_b) {
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]   Config key sets differ - returning false";
             return false;
+        }
+        // Compare configs - wrap in try-catch because equals() internally uses operator==
+        // which can throw ConfigurationError when comparing options of different types
+        try {
+            bool configs_equal = config_a.get().equals(config_b.get());
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]   config_a.get().equals(config_b.get()) = " << (configs_equal ? "true" : "false");
+            if (!configs_equal)
+                return false;
+        } catch (const std::exception& e) {
+            // If comparison throws, assume configs are different
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]   Exception during comparison: " << e.what() << " - returning false";
+            return false;
+        }
     }
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   All ranges equal - returning true";
     return true;
 }
 
 void Print::set_plate_layer_config_ranges(const t_layer_config_ranges& ranges)
 {
-    if (!layer_config_ranges_equal(m_plate_layer_config_ranges, ranges)) {
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] Print::set_plate_layer_config_ranges() called with " << ranges.size() << " ranges";
+    for (const auto& range : ranges) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Plate range [" << range.first.first << ", " << range.first.second << "]"
+            << " has layer_height=" << (range.second.has("layer_height") ?
+                std::to_string(range.second.option("layer_height")->getFloat()) : "NOT SET");
+    }
+
+    bool ranges_equal = layer_config_ranges_equal(m_plate_layer_config_ranges, ranges);
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Current ranges count: " << m_plate_layer_config_ranges.size()
+        << ", ranges_equal=" << (ranges_equal ? "true" : "false");
+
+    if (!ranges_equal) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Ranges changed - updating and invalidating all PrintObject steps";
         m_plate_layer_config_ranges = ranges;
         // Invalidate all print objects to trigger region regeneration
-        for (PrintObject* obj : m_objects)
+        for (PrintObject* obj : m_objects) {
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]     Invalidating steps for PrintObject " << obj->model_object()->name;
             obj->invalidate_all_steps();
+        }
+    } else {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Ranges unchanged - no invalidation needed";
     }
 }
 

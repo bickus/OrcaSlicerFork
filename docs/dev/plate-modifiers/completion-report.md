@@ -362,6 +362,60 @@ This was a fundamental design issue that would have prevented plate modifiers fr
 
 **Fix**: Added "Plate Settings" menu item to the plate context menu that opens the PlateSettingsDialog.
 
+### 10. Cached Volume IDs Not Cleared When Layer Ranges Change (Critical)
+**File**: `src/libslic3r/PrintApply.cpp`
+
+**Issue**: When plate height modifiers were added or changed, `generate_print_object_regions()` rebuilt the `layer_ranges_regions` structure but did not clear `cached_volume_ids`. In the subsequent call to `update_volume_bboxes()`, volumes were incorrectly treated as "already cached" and looked up from the old (now invalid) cache. Since the layer_ranges had been cleared and rebuilt, the volumes weren't registered in the new ranges, resulting in `volumes: 0` for all layer ranges. This caused `slice_volumes_inner()` to return empty slices, making all layers empty and triggering "No layers were detected" error.
+
+**Symptom**: After creating a plate height modifier and changing any setting (e.g., layer height), clicking Slice would fail with "No layers were detected". The error persisted even after removing the plate height modifier.
+
+**Root Cause**: The `cached_volume_ids` cache invalidation was missing when `can_reuse` was false (i.e., when layer_ranges structure changed).
+
+**Fix**: Added `out->cached_volume_ids.clear()` in `generate_print_object_regions()` when layer ranges are rebuilt:
+```cpp
+} else {
+    out->trafo_bboxes = trafo;
+    layer_ranges_regions.clear();
+    layer_ranges_regions.reserve(merged_ranges.size());
+    for (const auto &range : merged_ranges)
+        layer_ranges_regions.push_back({ range.layer_height_range, range.config });
+    // Clear cached volume IDs since layer ranges structure changed - volumes need to be re-processed
+    out->cached_volume_ids.clear();
+}
+```
+
+### 11. Plate/Object Layer Height Range Merge Logic
+**File**: `src/libslic3r/PrintObject.cpp`
+
+**Issue**: When plate height ranges overlapped with object height ranges, the merge logic in `update_layer_height_profile()` did not properly split plate ranges around object ranges. For example, if plate range [0, 10] contained object range [3.3, 4.3], the entire plate range would be overwritten instead of being split into [0, 3.3], [3.3, 4.3], [4.3, 10].
+
+**Fix**: Rewrote the merge logic to:
+1. For each plate range, find all overlapping object ranges
+2. Split the plate range around object ranges to find uncovered segments
+3. Add uncovered segments as plate range entries
+4. Add all object ranges (they take precedence)
+
+This ensures object height modifiers properly override plate modifiers only in their specific Z range while plate modifiers remain active elsewhere.
+
+---
+
+## Debug Logging
+
+Comprehensive debug logging with `[PHM]` prefix was added throughout the plate modifier workflow for troubleshooting:
+
+| File | Function | What's Logged |
+|------|----------|---------------|
+| `Print.cpp` | `set_plate_layer_config_ranges()` | Ranges received, invalidation |
+| `BackgroundSlicingProcess.cpp` | `apply()` | Plate ranges passed to Print |
+| `PrintObject.cpp` | `update_layer_height_profile()` | Range merging, input/output ranges |
+| `PrintObjectSlice.cpp` | `slice_volumes()` | slice_zs count, layer_ranges, volume counts |
+| `PrintApply.cpp` | `generate_print_object_regions()` | Layer ranges, merged ranges, cache clearing |
+| `PrintApply.cpp` | `update_volume_bboxes()` | Volume registration, bbox calculations |
+| `Slicing.cpp` | `layer_height_profile_from_ranges()` | Input ranges, processing |
+| `Slicing.cpp` | `generate_object_layers()` | Layer generation |
+
+To filter these logs: `grep "\[PHM\]" debug.log`
+
 ---
 
 ## Future Enhancements

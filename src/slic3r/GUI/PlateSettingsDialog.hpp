@@ -12,8 +12,6 @@
 
 namespace Slic3r { namespace GUI {
 
-class PlateHeightRangesPanel;
-
 wxDECLARE_EVENT(EVT_SET_BED_TYPE_CONFIRM, wxCommandEvent);
 wxDECLARE_EVENT(EVT_NEED_RESORT_LAYERS, wxCommandEvent);
 
@@ -164,11 +162,6 @@ public:
         return false;
     }
 
-    // Plate height range modifiers
-    void sync_height_ranges(const t_layer_config_ranges& ranges);
-    t_layer_config_ranges get_height_ranges() const;
-    bool has_height_ranges() const;
-
 protected:
     void add_layers();
     void delete_layers();
@@ -180,7 +173,6 @@ protected:
     ComboBox* m_spiral_mode_choice { nullptr };
     DragCanvas* m_drag_canvas;
     OtherLayersSeqPanel* m_other_layers_seq_panel;
-    PlateHeightRangesPanel* m_height_ranges_panel { nullptr };
     TextInput *m_ti_plate_name;
 };
 

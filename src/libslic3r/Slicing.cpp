@@ -170,24 +170,70 @@ std::vector<coordf_t> layer_height_profile_from_ranges(
 	const SlicingParameters 	&slicing_params,
 	const t_layer_config_ranges &layer_config_ranges)
 {
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] layer_height_profile_from_ranges() called with " << layer_config_ranges.size() << " ranges";
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   SlicingParams: layer_height=" << slicing_params.layer_height
+        << ", first_object_layer_height=" << slicing_params.first_object_layer_height
+        << ", object_print_z_height=" << slicing_params.object_print_z_height()
+        << ", object_print_z_uncompensated_height=" << slicing_params.object_print_z_uncompensated_height()
+        << ", first_object_layer_height_fixed=" << (slicing_params.first_object_layer_height_fixed() ? "true" : "false")
+        << ", valid=" << (slicing_params.valid ? "true" : "false");
+
+    // Log each input range
+    for (const auto& range : layer_config_ranges) {
+        const ConfigOption* opt_check = range.second.option("layer_height");
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Input range [" << range.first.first << ", " << range.first.second << "]"
+            << " layer_height=" << (opt_check ? std::to_string(opt_check->getFloat()) : "NOT SET")
+            << " opt_type=" << (opt_check ? std::to_string(static_cast<int>(opt_check->type())) : "N/A");
+    }
+
     // 1) If there are any height ranges, trim one by the other to make them non-overlapping. Insert the 1st layer if fixed.
     std::vector<std::pair<t_layer_height_range,coordf_t>> ranges_non_overlapping;
     ranges_non_overlapping.reserve(layer_config_ranges.size() * 4);
-    if (slicing_params.first_object_layer_height_fixed())
+    if (slicing_params.first_object_layer_height_fixed()) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Adding fixed first layer range [0, " << slicing_params.first_object_layer_height << "]";
         ranges_non_overlapping.push_back(std::pair<t_layer_height_range,coordf_t>(
-            t_layer_height_range(0., slicing_params.first_object_layer_height), 
+            t_layer_height_range(0., slicing_params.first_object_layer_height),
             slicing_params.first_object_layer_height));
+    }
     // The height ranges are sorted lexicographically by low / high layer boundaries.
     for (t_layer_config_ranges::const_iterator it_range = layer_config_ranges.begin(); it_range != layer_config_ranges.end(); ++ it_range) {
         coordf_t lo = it_range->first.first;
         coordf_t hi = std::min(it_range->first.second, slicing_params.object_print_z_height());
-        coordf_t height = it_range->second.option("layer_height")->getFloat();
-        if (! ranges_non_overlapping.empty())
+
+        // Get layer_height safely
+        const ConfigOption* opt = it_range->second.option("layer_height");
+        if (!opt) {
+            BOOST_LOG_TRIVIAL(error) << "[PHM] layer_height_profile_from_ranges: range [" << lo << ", " << hi
+                << "] has no layer_height option!";
+            continue;
+        }
+
+        // Verify it's a float type
+        if (opt->type() != coFloat && opt->type() != coFloatOrPercent) {
+            BOOST_LOG_TRIVIAL(error) << "[PHM] layer_height_profile_from_ranges: range [" << lo << ", " << hi
+                << "] layer_height has wrong type: " << static_cast<int>(opt->type());
+            continue;
+        }
+
+        coordf_t height = opt->getFloat();
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Processing range [" << lo << ", " << hi << "] height=" << height;
+
+        if (! ranges_non_overlapping.empty()) {
+            coordf_t old_lo = lo;
             // Trim current low with the last high.
             lo = std::max(lo, ranges_non_overlapping.back().first.second);
-        if (lo + EPSILON < hi)
+            if (old_lo != lo) {
+                BOOST_LOG_TRIVIAL(debug) << "[PHM]     Trimmed lo from " << old_lo << " to " << lo
+                    << " (last range ended at " << ranges_non_overlapping.back().first.second << ")";
+            }
+        }
+        if (lo + EPSILON < hi) {
             // Ignore too narrow ranges.
             ranges_non_overlapping.push_back(std::pair<t_layer_height_range,coordf_t>(t_layer_height_range(lo, hi), height));
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]     Added non-overlapping range [" << lo << ", " << hi << "] height=" << height;
+        } else {
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]     Skipped too narrow range: lo=" << lo << ", hi=" << hi << ", diff=" << (hi - lo);
+        }
     }
 
     // 2) Convert the trimmed ranges to a height profile, fill in the undefined intervals between z=0 and z=slicing_params.object_print_z_max()
@@ -232,8 +278,21 @@ std::vector<coordf_t> layer_height_profile_from_ranges(
 
     if (coordf_t z = last_z(); z < slicing_params.object_print_z_uncompensated_height()) {
         // Insert a step of normal layer height up to the object top.
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Filling gap to object top: last_z=" << z
+            << ", object_height=" << slicing_params.object_print_z_uncompensated_height()
+            << ", using layer_height=" << slicing_params.layer_height;
         lh_append(z, slicing_params.layer_height);
         lh_append(slicing_params.object_print_z_uncompensated_height(), slicing_params.layer_height);
+    }
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] layer_height_profile_from_ranges() RESULT: profile_size=" << layer_height_profile.size()
+        << ", ranges_non_overlapping.size=" << ranges_non_overlapping.size();
+    if (layer_height_profile.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << "[PHM]   WARNING: Returning EMPTY layer_height_profile!";
+    } else if (layer_height_profile.size() >= 4) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   First entry: z=" << layer_height_profile[0] << ", h=" << layer_height_profile[1];
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Last entry: z=" << layer_height_profile[layer_height_profile.size()-2]
+            << ", h=" << layer_height_profile[layer_height_profile.size()-1];
     }
 
    	return layer_height_profile;
@@ -744,6 +803,20 @@ std::vector<coordf_t> generate_object_layers(
 	const std::vector<coordf_t> &layer_height_profile,
     bool is_precise_z_height)
 {
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] generate_object_layers() called with layer_height_profile.size()=" << layer_height_profile.size()
+        << ", is_precise_z_height=" << (is_precise_z_height ? "true" : "false");
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   SlicingParams: object_print_z_height=" << slicing_params.object_print_z_height()
+        << ", min_layer_height=" << slicing_params.min_layer_height
+        << ", max_layer_height=" << slicing_params.max_layer_height
+        << ", first_object_layer_height=" << slicing_params.first_object_layer_height
+        << ", first_object_layer_height_fixed=" << (slicing_params.first_object_layer_height_fixed() ? "true" : "false")
+        << ", object_shrinkage_compensation_z=" << slicing_params.object_shrinkage_compensation_z;
+
+    if (layer_height_profile.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "[PHM]   ERROR: layer_height_profile is EMPTY! Returning empty result.";
+        return {};
+    }
+
     assert(! layer_height_profile.empty());
 
     coordf_t print_z = 0;
@@ -752,6 +825,7 @@ std::vector<coordf_t> generate_object_layers(
     std::vector<coordf_t> out;
 
     if (slicing_params.first_object_layer_height_fixed()) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Adding fixed first layer [0, " << slicing_params.first_object_layer_height << "]";
         out.push_back(0);
         print_z = slicing_params.first_object_layer_height;
         out.push_back(print_z);
@@ -798,6 +872,15 @@ std::vector<coordf_t> generate_object_layers(
 
     if (is_precise_z_height)
         adjust_layer_series_to_align_object_height(slicing_params, out);
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] generate_object_layers() RESULT: " << out.size() << " entries (" << (out.size() / 2) << " layers)";
+    if (out.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << "[PHM]   WARNING: Returning EMPTY layer list!";
+    } else if (out.size() >= 4) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   First layer: [" << out[0] << ", " << out[1] << "]";
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Last layer: [" << out[out.size()-2] << ", " << out[out.size()-1] << "]";
+    }
+
     return out;
 }
 

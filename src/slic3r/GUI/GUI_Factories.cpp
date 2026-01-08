@@ -1553,6 +1553,15 @@ void MenuFactory::create_plate_menu()
         }, "cog", nullptr,
         []() { return true; }, m_parent);
 
+    // Add Height Range Modifier - adds plate-level height modifier
+    append_menu_item(menu, wxID_ANY, _L("Add Height Range Modifier"), _L("Add plate-level height range modifier"),
+        [](wxCommandEvent&) {
+            obj_list()->plate_layers_editing();
+        }, "height_range_modifier", nullptr,
+        []() {
+            return wxGetApp().preset_bundle->printers.get_selected_preset().printer_technology() != ptSLA;
+        }, m_parent);
+
     // add shapes
     menu->AppendSeparator();
     wxMenu* sub_menu_primitives = append_submenu_add_generic(menu, ModelVolumeType::INVALID);

@@ -698,6 +698,21 @@ ModelConfig& ObjectList::get_item_config(const wxDataViewItem& item) const
     if (type & itPlate)
         return s_empty_config;
 
+    // Handle plate layers - they have no associated object
+    if (type & itLayer) {
+        if (m_objects_model->IsPlateLayer(item)) {
+            PartPlate* plate = m_objects_model->GetPlateFromLayerItem(item);
+            if (plate) {
+                t_layer_height_range range = m_objects_model->GetLayerRangeByItem(item);
+                auto& ranges = plate->layer_config_ranges();
+                auto it = ranges.find(range);
+                if (it != ranges.end())
+                    return it->second;
+            }
+            return s_empty_config;
+        }
+    }
+
     const int obj_idx = m_objects_model->GetObjectIdByItem(item);
     const int vol_idx = type & itVolume ? m_objects_model->GetVolumeIdByItem(item) : -1;
 
@@ -3059,6 +3074,375 @@ wxDataViewItem ObjectList::add_layer_root_item(const wxDataViewItem obj_item)
 
     Expand(layers_item);
     return layers_item;
+}
+
+// =============================================================================
+// Plate Layer Support
+// =============================================================================
+
+void ObjectList::plate_layers_editing()
+{
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] ObjectList::plate_layers_editing() called";
+
+    const wxDataViewItem item = GetSelection();
+    if (!item) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   No item selected, returning";
+        return;
+    }
+
+    const ItemType type = m_objects_model->GetItemType(item);
+    if (!(type & itPlate)) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Item is not a plate (type=" << type << "), returning";
+        return;
+    }
+
+    PartPlate* plate = m_objects_model->GetPlateFromLayerItem(item);
+    if (!plate) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Could not get plate from item, returning";
+        return;
+    }
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Editing layers for plate " << plate->get_index();
+
+    wxDataViewItem layers_item = m_objects_model->GetLayerRootItem(item);
+
+    // If it doesn't exist, create it
+    if (!layers_item.IsOk())
+    {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   No layer root item exists, creating default range";
+        t_layer_config_ranges& ranges = plate->layer_config_ranges();
+
+        // Set default range if empty
+        if (ranges.empty()) {
+            take_snapshot("Add plate layers");
+            double default_layer_height = wxGetApp().preset_bundle->prints.get_edited_preset().config.opt_float("layer_height");
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]   Creating default range [0, 10] with layer_height=" << default_layer_height;
+            DynamicPrintConfig config;
+            config.set_key_value("layer_height", new ConfigOptionFloat(default_layer_height));
+            ranges[{ 0.0f, 10.0f }].assign_config(config);
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]   Plate now has " << ranges.size() << " range(s)";
+        }
+
+        // Create layer root item
+        layers_item = add_plate_layer_root_item(item);
+
+        // Trigger re-slice since we added new layer config ranges
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Calling notify_plate_layer_changed()";
+        notify_plate_layer_changed(plate);
+    }
+
+    if (!layers_item.IsOk())
+        return;
+
+    // Reset selection for visual hints
+    wxGetApp().obj_layers()->reset_selection();
+    wxGetApp().plater()->canvas3D()->handle_sidebar_focus_event("", false);
+
+    // Select and expand
+    select_item(layers_item);
+    Expand(layers_item);
+}
+
+wxDataViewItem ObjectList::add_plate_layer_root_item(const wxDataViewItem plate_item)
+{
+    PartPlate* plate = m_objects_model->GetPlateFromLayerItem(plate_item);
+    if (!plate || plate->layer_config_ranges().empty() || printer_technology() == ptSLA)
+        return wxDataViewItem(nullptr);
+
+    // Create LayerRoot item
+    wxDataViewItem layers_item = m_objects_model->AddPlateLayersRoot(plate_item);
+
+    // Create Layer item(s) according to layer_config_ranges
+    for (const auto& range : plate->layer_config_ranges())
+        add_plate_layer_item(range.first, layers_item);
+
+    Expand(layers_item);
+    return layers_item;
+}
+
+void ObjectList::add_plate_layer_item(const t_layer_height_range& range,
+                                      const wxDataViewItem layers_item,
+                                      const int layer_idx /* = -1*/)
+{
+    PartPlate* plate = m_objects_model->GetPlateFromLayerItem(layers_item);
+    if (!plate)
+        return;
+
+    wxDataViewItem parent_item = m_objects_model->GetParent(layers_item);
+    if (!parent_item.IsOk())
+        return;
+
+    const DynamicPrintConfig& config = plate->layer_config_ranges()[range].get();
+
+    const auto layer_item = m_objects_model->AddPlateLayersChild(
+        parent_item,
+        range,
+        layer_idx);
+
+    add_settings_item(layer_item, &config);
+}
+
+void ObjectList::del_plate_layer_range(const t_layer_height_range& range)
+{
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] ObjectList::del_plate_layer_range() called for range [" << range.first << ", " << range.second << "]";
+
+    const wxDataViewItem item = GetSelection();
+    if (!item) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   No item selected, returning";
+        return;
+    }
+
+    PartPlate* plate = m_objects_model->GetPlateFromLayerItem(item);
+    if (!plate) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Could not get plate from item, returning";
+        return;
+    }
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Deleting range from plate " << plate->get_index();
+
+    t_layer_config_ranges& ranges = plate->layer_config_ranges();
+    auto del_range = ranges.find(range);
+    if (del_range == ranges.end()) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Range not found in plate ranges, returning";
+        return;
+    }
+
+    take_snapshot("Remove plate height range");
+
+    wxDataViewItem selectable_item = item;
+    if (ranges.size() == 1)
+        selectable_item = m_objects_model->GetParent(selectable_item);
+
+    // Find and delete the layer item
+    int plate_idx = plate->get_index();
+    wxDataViewItem layer_item = m_objects_model->GetItemByPlateLayerRange(plate_idx, range);
+    if (layer_item.IsOk())
+        m_objects_model->Delete(layer_item);
+
+    // Remove from plate data
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Erasing range [" << range.first << ", " << range.second << "] from plate data";
+    ranges.erase(del_range);
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Plate now has " << ranges.size() << " range(s)";
+
+    // If no ranges left, remove layer root
+    if (ranges.empty()) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   No ranges left, removing layer root item";
+        wxDataViewItem plate_item = m_objects_model->GetItemByPlateId(plate_idx);
+        if (!plate_item.IsOk())
+            return;
+        wxDataViewItem layer_root = m_objects_model->GetLayerRootItem(plate_item);
+        if (layer_root.IsOk())
+            m_objects_model->Delete(layer_root);
+    }
+
+    notify_plate_layer_changed(plate);
+
+    select_item(selectable_item);
+}
+
+void ObjectList::add_plate_layer_range_after_current(const t_layer_height_range current_range)
+{
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] ObjectList::add_plate_layer_range_after_current() called for range [" << current_range.first << ", " << current_range.second << "]";
+
+    const wxDataViewItem item = GetSelection();
+    if (!item) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   No item selected, returning";
+        return;
+    }
+
+    PartPlate* plate = m_objects_model->GetPlateFromLayerItem(item);
+    if (!plate) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Could not get plate from item, returning";
+        return;
+    }
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Adding range after current for plate " << plate->get_index();
+
+    t_layer_config_ranges& ranges = plate->layer_config_ranges();
+    auto it_range = ranges.find(current_range);
+    if (it_range == ranges.end()) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Current range not found, returning";
+        return;
+    }
+
+    take_snapshot("Add plate height range");
+
+    auto it_next_range = it_range;
+    bool changed = false;
+
+    if (++it_next_range == ranges.end())
+    {
+        // Adding after last range
+        const t_layer_height_range new_range = { current_range.second, current_range.second + 10.0 };
+        double default_layer_height = wxGetApp().preset_bundle->prints.get_edited_preset().config.opt_float("layer_height");
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Adding new range [" << new_range.first << ", " << new_range.second << "] after last range with layer_height=" << default_layer_height;
+        DynamicPrintConfig config;
+        config.set_key_value("layer_height", new ConfigOptionFloat(default_layer_height));
+        ranges[new_range].assign_config(config);
+        changed = true;
+    }
+    else
+    {
+        // Adding between ranges
+        const coordf_t delta = it_next_range->first.first - current_range.second;
+        if (delta >= 0.01)
+        {
+            const coordf_t midpoint = current_range.second + delta / 2.0;
+            const t_layer_height_range new_range = { current_range.second, midpoint };
+            double default_layer_height = wxGetApp().preset_bundle->prints.get_edited_preset().config.opt_float("layer_height");
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]   Adding new range [" << new_range.first << ", " << new_range.second << "] between ranges with layer_height=" << default_layer_height;
+            DynamicPrintConfig config;
+            config.set_key_value("layer_height", new ConfigOptionFloat(default_layer_height));
+            ranges[new_range].assign_config(config);
+            changed = true;
+        } else {
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]   Gap too small (" << delta << "), not adding new range";
+        }
+    }
+
+    if (changed) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Plate now has " << ranges.size() << " range(s)";
+        // Rebuild the layer items
+        int plate_idx = plate->get_index();
+        wxDataViewItem plate_item = m_objects_model->GetItemByPlateId(plate_idx);
+        wxDataViewItem layer_root = m_objects_model->GetLayerRootItem(plate_item);
+
+        m_prevent_list_events = true;
+        if (layer_root.IsOk()) {
+            m_objects_model->DeleteChildren(layer_root);
+            for (const auto& r : ranges)
+                add_plate_layer_item(r.first, layer_root);
+        }
+        m_prevent_list_events = false;
+
+        notify_plate_layer_changed(plate);
+        select_item(item);
+        Expand(layer_root);
+    }
+}
+
+wxString ObjectList::can_add_new_plate_range_after_current(t_layer_height_range current_range)
+{
+    const wxDataViewItem item = GetSelection();
+    if (!item)
+        return "No selection";
+
+    PartPlate* plate = m_objects_model->GetPlateFromLayerItem(item);
+    if (!plate)
+        return "No plate";
+
+    const t_layer_config_ranges& ranges = plate->layer_config_ranges();
+    auto it_range = ranges.find(current_range);
+    if (it_range == ranges.end())
+        return "Range not found";
+
+    auto it_next_range = it_range;
+    if (++it_next_range == ranges.end())
+        return ""; // Can always add after last range
+
+    const coordf_t delta = it_next_range->first.first - current_range.second;
+    if (delta < 0.01)
+        return _L("No space for new range");
+
+    return "";
+}
+
+bool ObjectList::edit_plate_layer_range(const t_layer_height_range& range,
+                                        const t_layer_height_range& new_range,
+                                        bool suppress_ui_update /* = false*/)
+{
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] ObjectList::edit_plate_layer_range() called: old=[" << range.first << ", " << range.second
+        << "] -> new=[" << new_range.first << ", " << new_range.second << "], suppress_ui=" << (suppress_ui_update ? "true" : "false");
+
+    const wxDataViewItem item = GetSelection();
+    if (!item) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   No item selected, returning false";
+        return false;
+    }
+
+    PartPlate* plate = m_objects_model->GetPlateFromLayerItem(item);
+    if (!plate) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Could not get plate from item, returning false";
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Editing range on plate " << plate->get_index();
+
+    take_snapshot("Edit plate height range");
+
+    t_layer_config_ranges& ranges = plate->layer_config_ranges();
+
+    {
+        ModelConfig config = std::move(ranges[range]);
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Moving config from range [" << range.first << ", " << range.second
+            << "] to [" << new_range.first << ", " << new_range.second << "]"
+            << " layer_height=" << (config.has("layer_height") ? std::to_string(config.option("layer_height")->getFloat()) : "NOT SET");
+        ranges.erase(range);
+        ranges[new_range] = std::move(config);
+    }
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Plate now has " << ranges.size() << " range(s)";
+
+    notify_plate_layer_changed(plate);
+
+    if (!suppress_ui_update) {
+        // Rebuild layer items in tree
+        int plate_idx = plate->get_index();
+        wxDataViewItem plate_item = m_objects_model->GetItemByPlateId(plate_idx);
+        wxDataViewItem root_item = m_objects_model->GetLayerRootItem(plate_item);
+
+        m_prevent_list_events = true;
+        m_objects_model->DeleteChildren(root_item);
+
+        if (root_item.IsOk()) {
+            for (const auto& r : ranges)
+                add_plate_layer_item(r.first, root_item);
+        }
+
+        const ItemType sel_type = m_objects_model->GetItemType(item);
+        if (sel_type & (itLayer | itLayerRoot))
+            select_item(sel_type & itLayer ? m_objects_model->GetItemByPlateLayerRange(plate_idx, new_range) : root_item);
+
+        Expand(root_item);
+        m_prevent_list_events = false;
+    }
+
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   edit_plate_layer_range() completed successfully";
+    return true;
+}
+
+void ObjectList::notify_plate_layer_changed(PartPlate* plate)
+{
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] ObjectList::notify_plate_layer_changed() called for plate " << (plate ? std::to_string(plate->get_index()) : "NULL");
+    if (!plate) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Plate is NULL, returning";
+        return;
+    }
+
+    // Log current state of plate layer config ranges
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Plate " << plate->get_index() << " has " << plate->layer_config_ranges().size() << " range(s):";
+    for (const auto& range : plate->layer_config_ranges()) {
+        BOOST_LOG_TRIVIAL(debug) << "[PHM]     Range [" << range.first.first << ", " << range.first.second << "] with "
+            << range.second.keys().size() << " config keys:";
+        for (const auto& key : range.second.keys()) {
+            auto opt = range.second.option(key);
+            BOOST_LOG_TRIVIAL(debug) << "[PHM]       " << key << "=" << (opt ? opt->serialize() : "null");
+        }
+    }
+
+    // Immediately invalidate slice result so UI updates correctly
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Invalidating slice result and scheduling background process";
+    plate->update_slice_result_valid_state(false);
+    // Reset gcode toolpaths to clear the old preview immediately
+    // This must be done BEFORE update() which reloads the preview
+    wxGetApp().plater()->reset_gcode_toolpaths();
+    // Trigger re-slice - need both update() and schedule_background_process()
+    // update() refreshes the UI, schedule_background_process() invalidates the slice
+    wxGetApp().plater()->update();
+    wxGetApp().plater()->schedule_background_process();
+    // Immediately update UI to show slice is needed (don't wait for timer)
+    wxGetApp().mainframe->update_slice_print_status(MainFrame::eEventSliceUpdate, true, false);
+    BOOST_LOG_TRIVIAL(debug) << "[PHM]   notify_plate_layer_changed() completed";
 }
 
 DynamicPrintConfig ObjectList::get_default_layer_config(const int obj_idx)

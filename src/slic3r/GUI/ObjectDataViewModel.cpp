@@ -129,7 +129,11 @@ ObjectDataViewModelNode::ObjectDataViewModelNode(ObjectDataViewModelNode* parent
     {
         //BBS do not support layer range edit
         m_bmp = create_scaled_bitmap(LayerRootIcon);
-        m_name = _(L("Layers"));
+        // Use different name for plate layers vs object layers
+        if (parent && (parent->GetType() & itPlate))
+            m_name = _(L("Plate Layers"));
+        else
+            m_name = _(L("Layers"));
     }
     else if (type == itInfo)
         assert(false);
@@ -743,7 +747,11 @@ static bool append_root_node(ObjectDataViewModelNode *parent_node,
                 parent_node->GetNthChild(inst_root_id);
 
     if (inst_root_id < 0) {
-        if ((root_type&itInstanceRoot) ||
+        // For plate nodes, insert LayerRoot at the beginning (before objects)
+        if ((root_type & itLayerRoot) && (parent_node->GetType() & itPlate)) {
+            parent_node->Insert(*root_node, 0);
+        }
+        else if ((root_type&itInstanceRoot) ||
             ( (root_type&itLayerRoot) && get_root_idx(parent_node, itInstanceRoot)<0) )
             parent_node->Append(*root_node);
         else if (root_type&itLayerRoot)
@@ -1455,6 +1463,126 @@ t_layer_height_range ObjectDataViewModel::GetLayerRangeByItem(const wxDataViewIt
     return node->GetLayerRange();
 }
 
+// =============================================================================
+// Plate Layer Support
+// =============================================================================
+
+bool ObjectDataViewModel::IsPlateLayerRoot(const wxDataViewItem& item) const
+{
+    if (!item.IsOk())
+        return false;
+
+    ObjectDataViewModelNode* node = static_cast<ObjectDataViewModelNode*>(item.GetID());
+    if (!node || !(node->GetType() & itLayerRoot))
+        return false;
+
+    // Check if parent is a plate
+    ObjectDataViewModelNode* parent = node->GetParent();
+    return parent && (parent->GetType() & itPlate);
+}
+
+bool ObjectDataViewModel::IsPlateLayer(const wxDataViewItem& item) const
+{
+    if (!item.IsOk())
+        return false;
+
+    ObjectDataViewModelNode* node = static_cast<ObjectDataViewModelNode*>(item.GetID());
+    if (!node || !(node->GetType() & itLayer))
+        return false;
+
+    // Check if grandparent is a plate (parent is LayerRoot, grandparent is plate)
+    ObjectDataViewModelNode* parent = node->GetParent();
+    if (!parent || !(parent->GetType() & itLayerRoot))
+        return false;
+
+    ObjectDataViewModelNode* grandparent = parent->GetParent();
+    return grandparent && (grandparent->GetType() & itPlate);
+}
+
+PartPlate* ObjectDataViewModel::GetPlateFromLayerItem(const wxDataViewItem& item) const
+{
+    if (!item.IsOk())
+        return nullptr;
+
+    ObjectDataViewModelNode* node = static_cast<ObjectDataViewModelNode*>(item.GetID());
+    if (!node)
+        return nullptr;
+
+    // Navigate up to find the plate node
+    ObjectDataViewModelNode* current = node;
+    while (current) {
+        if (current->GetType() & itPlate)
+            return current->m_part_plate;
+        current = current->GetParent();
+    }
+
+    return nullptr;
+}
+
+wxDataViewItem ObjectDataViewModel::GetItemByPlateLayerRange(const int plate_idx, const t_layer_height_range& layer_range)
+{
+    // Use GetItemByPlateId to find the plate by its index, not by vector position
+    wxDataViewItem plate_item = GetItemByPlateId(plate_idx);
+    if (!plate_item.IsOk())
+        return wxDataViewItem(0);
+
+    wxDataViewItem layer_root = GetItemByType(plate_item, itLayerRoot);
+    if (!layer_root.IsOk())
+        return wxDataViewItem(0);
+
+    ObjectDataViewModelNode* root_node = static_cast<ObjectDataViewModelNode*>(layer_root.GetID());
+    for (size_t i = 0; i < root_node->GetChildCount(); i++) {
+        ObjectDataViewModelNode* child = root_node->GetNthChild(i);
+        if (child && child->GetLayerRange() == layer_range)
+            return wxDataViewItem(child);
+    }
+
+    return wxDataViewItem(0);
+}
+
+wxDataViewItem ObjectDataViewModel::AddPlateLayersRoot(const wxDataViewItem& plate_item)
+{
+    ObjectDataViewModelNode* plate_node = static_cast<ObjectDataViewModelNode*>(plate_item.GetID());
+    if (!plate_node || !(plate_node->GetType() & itPlate))
+        return wxDataViewItem(0);
+
+    return AddRoot(plate_item, itLayerRoot);
+}
+
+wxDataViewItem ObjectDataViewModel::AddPlateLayersChild(const wxDataViewItem& plate_item,
+                                                        const t_layer_height_range& layer_range,
+                                                        const int index /* = -1*/)
+{
+    ObjectDataViewModelNode* plate_node = static_cast<ObjectDataViewModelNode*>(plate_item.GetID());
+    if (!plate_node || !(plate_node->GetType() & itPlate))
+        return wxDataViewItem(0);
+
+    // Get or create the layer root
+    wxDataViewItem layer_root_item = GetItemByType(plate_item, itLayerRoot);
+    ObjectDataViewModelNode* layer_root_node;
+
+    if (!layer_root_item.IsOk()) {
+        // Create layer root
+        layer_root_item = AddPlateLayersRoot(plate_item);
+        if (!layer_root_item.IsOk())
+            return wxDataViewItem(0);
+    }
+
+    layer_root_node = static_cast<ObjectDataViewModelNode*>(layer_root_item.GetID());
+
+    // Add layer node (extruder = 0 means default for plate layers)
+    ObjectDataViewModelNode* layer_node = new ObjectDataViewModelNode(layer_root_node, layer_range, index, wxEmptyString);
+    if (index < 0)
+        layer_root_node->Append(layer_node);
+    else
+        layer_root_node->Insert(layer_node, index);
+
+    wxDataViewItem layer_item((void*)layer_node);
+    ItemAdded(layer_root_item, layer_item);
+
+    return layer_item;
+}
+
 bool ObjectDataViewModel::UpdateColumValues(unsigned col)
 {
     switch (col)
@@ -2037,8 +2165,15 @@ wxDataViewItem ObjectDataViewModel::GetObject(const wxDataViewItem& item) const
         return item;
 
     ObjectDataViewModelNode* parent_node = node->GetParent();
-    while (parent_node->m_type != itObject)
+    while (parent_node && parent_node->m_type != itObject) {
+        // If we reach a plate, there's no object - this is a plate layer item
+        if (parent_node->m_type & itPlate)
+            return wxDataViewItem(0);
         parent_node = parent_node->GetParent();
+    }
+
+    if (!parent_node)
+        return wxDataViewItem(0);
 
     return wxDataViewItem((void*)parent_node);
 }

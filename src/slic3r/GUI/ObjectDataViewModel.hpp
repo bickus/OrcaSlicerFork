@@ -513,6 +513,16 @@ public:
     bool        HasWarningIcon(const wxDataViewItem& item) const;
     t_layer_height_range    GetLayerRangeByItem(const wxDataViewItem& item) const;
 
+    // Plate layer support
+    bool        IsPlateLayerRoot(const wxDataViewItem& item) const;
+    bool        IsPlateLayer(const wxDataViewItem& item) const;
+    PartPlate*  GetPlateFromLayerItem(const wxDataViewItem& item) const;
+    wxDataViewItem GetItemByPlateLayerRange(const int plate_idx, const t_layer_height_range& layer_range);
+    wxDataViewItem AddPlateLayersRoot(const wxDataViewItem& plate_item);
+    wxDataViewItem AddPlateLayersChild(const wxDataViewItem& plate_item,
+                                       const t_layer_height_range& layer_range,
+                                       const int index = -1);
+
     bool        UpdateColumValues(unsigned col);
     void        UpdateExtruderBitmap(wxDataViewItem item);
     // BBS: add use_obj_extruder
