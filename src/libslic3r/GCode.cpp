@@ -3817,11 +3817,8 @@ LayerResult GCode::process_layer(
                 if (print_z >= range.first.first - EPSILON && print_z < range.first.second) {
                     if (range.second.has("nozzle_temperature_override")) {
                         int temp_value = range.second.opt_int("nozzle_temperature_override");
-                        if (temp_value != 0) {
+                        if (temp_value != 0)
                             current_temp_override = temp_value;
-                            BOOST_LOG_TRIVIAL(debug) << "[PHM] GCode: Found nozzle_temperature_override=" << current_temp_override
-                                                     << " at Z=" << print_z << " in range [" << range.first.first << ", " << range.first.second << ")";
-                        }
                     }
                     break;
                 }
@@ -3860,12 +3857,8 @@ LayerResult GCode::process_layer(
                         const ConfigOption* opt = range.second.option("override_retractions");
                         if (opt != nullptr && static_cast<const ConfigOptionBool*>(opt)->value) {
                             current_override_active = true;
-                            if (range.second.has("retraction_length_override")) {
+                            if (range.second.has("retraction_length_override"))
                                 current_retraction_override = static_cast<float>(range.second.opt_float("retraction_length_override"));
-                                BOOST_LOG_TRIVIAL(debug) << "[PHM] GCode: Found retraction override, length="
-                                                         << current_retraction_override << " at Z=" << print_z
-                                                         << " in range [" << range.first.first << ", " << range.first.second << ")";
-                            }
                         }
                     }
                     break;

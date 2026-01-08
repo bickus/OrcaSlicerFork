@@ -3346,14 +3346,6 @@ std::vector<unsigned int> PrintObject::object_extruders() const
 
 bool PrintObject::update_layer_height_profile(const ModelObject &model_object, const SlicingParameters &slicing_parameters, std::vector<coordf_t> &layer_height_profile)
 {
-    BOOST_LOG_TRIVIAL(debug) << "[PHM] update_layer_height_profile(no plate ranges) called for object: " << model_object.name;
-    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Input: layer_height_profile.size()=" << layer_height_profile.size()
-        << ", model_object.layer_height_profile.size()=" << model_object.layer_height_profile.get().size()
-        << ", model_object.layer_config_ranges.size()=" << model_object.layer_config_ranges.size();
-    BOOST_LOG_TRIVIAL(debug) << "[PHM]   SlicingParams: object_print_z_uncompensated_max=" << slicing_parameters.object_print_z_uncompensated_max
-        << ", object_print_z_min=" << slicing_parameters.object_print_z_min
-        << ", first_object_layer_height=" << slicing_parameters.first_object_layer_height;
-
     bool updated = false;
 
     if (layer_height_profile.empty()) {
@@ -3363,7 +3355,6 @@ bool PrintObject::update_layer_height_profile(const ModelObject &model_object, c
         // The layer height returned is sampled with high density for the UI layer height painting
         // and smoothing tool to work.
         updated = true;
-        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Copied model_object.layer_height_profile, now size=" << layer_height_profile.size();
     }
 
     // Verify the layer_height_profile.
@@ -3371,29 +3362,16 @@ bool PrintObject::update_layer_height_profile(const ModelObject &model_object, c
         // Must not be of even length.
         ((layer_height_profile.size() & 1) != 0 ||
             // Last entry must be at the top of the object.
-            std::abs(layer_height_profile[layer_height_profile.size() - 2] - slicing_parameters.object_print_z_uncompensated_max + slicing_parameters.object_print_z_min) > 1e-3)) {
-        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Profile verification FAILED:"
-            << " odd_size=" << ((layer_height_profile.size() & 1) != 0 ? "true" : "false")
-            << ", last_z=" << (layer_height_profile.size() >= 2 ? layer_height_profile[layer_height_profile.size() - 2] : 0)
-            << ", expected_z=" << (slicing_parameters.object_print_z_uncompensated_max - slicing_parameters.object_print_z_min)
-            << ", diff=" << (layer_height_profile.size() >= 2 ?
-                std::abs(layer_height_profile[layer_height_profile.size() - 2] - slicing_parameters.object_print_z_uncompensated_max + slicing_parameters.object_print_z_min) : 0);
+            std::abs(layer_height_profile[layer_height_profile.size() - 2] - slicing_parameters.object_print_z_uncompensated_max + slicing_parameters.object_print_z_min) > 1e-3))
         layer_height_profile.clear();
-    }
 
     if (layer_height_profile.empty() || layer_height_profile[1] != slicing_parameters.first_object_layer_height) {
-        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Need to generate profile from ranges:"
-            << " empty=" << (layer_height_profile.empty() ? "true" : "false")
-            << ", first_layer_height_mismatch=" << (layer_height_profile.size() > 1 ? (layer_height_profile[1] != slicing_parameters.first_object_layer_height ? "true" : "false") : "N/A");
         //layer_height_profile = layer_height_profile_adaptive(slicing_parameters, model_object.layer_config_ranges, model_object.volumes);
         layer_height_profile = layer_height_profile_from_ranges(slicing_parameters, model_object.layer_config_ranges);
         // The layer height profile is already compressed.
         updated = true;
-        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Generated profile from ranges, size=" << layer_height_profile.size();
     }
 
-    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Result: updated=" << (updated ? "true" : "false")
-        << ", final layer_height_profile.size()=" << layer_height_profile.size();
     return updated;
 }
 
@@ -3401,69 +3379,41 @@ bool PrintObject::update_layer_height_profile(const ModelObject &model_object, c
 // Plate ranges have lower priority (object ranges override)
 bool PrintObject::update_layer_height_profile(const ModelObject &model_object, const SlicingParameters &slicing_parameters, std::vector<coordf_t> &layer_height_profile, const t_layer_config_ranges &plate_layer_ranges)
 {
-    BOOST_LOG_TRIVIAL(debug) << "[PHM] update_layer_height_profile(WITH plate ranges) called for object: " << model_object.name;
-    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Input: layer_height_profile.size()=" << layer_height_profile.size()
-        << ", model_object.layer_height_profile.size()=" << model_object.layer_height_profile.get().size()
-        << ", model_object.layer_config_ranges.size()=" << model_object.layer_config_ranges.size()
-        << ", plate_layer_ranges.size()=" << plate_layer_ranges.size();
-    BOOST_LOG_TRIVIAL(debug) << "[PHM]   SlicingParams: object_print_z_uncompensated_max=" << slicing_parameters.object_print_z_uncompensated_max
-        << ", object_print_z_min=" << slicing_parameters.object_print_z_min
-        << ", first_object_layer_height=" << slicing_parameters.first_object_layer_height
-        << ", layer_height=" << slicing_parameters.layer_height;
+    BOOST_LOG_TRIVIAL(debug) << "[PHM] update_layer_height_profile() for object: " << model_object.name
+        << " with " << plate_layer_ranges.size() << " plate ranges";
 
     bool updated = false;
 
     if (layer_height_profile.empty()) {
         layer_height_profile = std::vector<coordf_t>(model_object.layer_height_profile.get());
         updated = true;
-        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Copied model_object.layer_height_profile, now size=" << layer_height_profile.size();
     }
 
     // Verify the layer_height_profile.
     if (!layer_height_profile.empty() &&
         ((layer_height_profile.size() & 1) != 0 ||
-            std::abs(layer_height_profile[layer_height_profile.size() - 2] - slicing_parameters.object_print_z_uncompensated_max + slicing_parameters.object_print_z_min) > 1e-3)) {
-        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Profile verification FAILED:"
-            << " odd_size=" << ((layer_height_profile.size() & 1) != 0 ? "true" : "false")
-            << ", last_z=" << (layer_height_profile.size() >= 2 ? layer_height_profile[layer_height_profile.size() - 2] : 0)
-            << ", expected_z=" << (slicing_parameters.object_print_z_uncompensated_max - slicing_parameters.object_print_z_min)
-            << ", diff=" << (layer_height_profile.size() >= 2 ?
-                std::abs(layer_height_profile[layer_height_profile.size() - 2] - slicing_parameters.object_print_z_uncompensated_max + slicing_parameters.object_print_z_min) : 0);
+            std::abs(layer_height_profile[layer_height_profile.size() - 2] - slicing_parameters.object_print_z_uncompensated_max + slicing_parameters.object_print_z_min) > 1e-3))
         layer_height_profile.clear();
-    }
 
     if (layer_height_profile.empty() || layer_height_profile[1] != slicing_parameters.first_object_layer_height) {
-        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Need to generate profile from ranges:"
-            << " empty=" << (layer_height_profile.empty() ? "true" : "false")
-            << ", first_layer_height_mismatch=" << (layer_height_profile.size() > 1 ? (layer_height_profile[1] != slicing_parameters.first_object_layer_height ? "true" : "false") : "N/A");
-
         // Merge plate and object layer config ranges with proper overlap handling
         // Object ranges have higher priority and should split overlapping plate ranges
         t_layer_config_ranges merged_ranges;
-        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Merging ranges with overlap handling: plate=" << plate_layer_ranges.size()
-            << ", object=" << model_object.layer_config_ranges.size();
 
         // First, collect object ranges (higher priority)
         std::vector<std::pair<t_layer_height_range, ModelConfig>> object_ranges;
         for (const auto& range : model_object.layer_config_ranges) {
-            if (range.second.has("layer_height")) {
+            if (range.second.has("layer_height"))
                 object_ranges.push_back(range);
-                BOOST_LOG_TRIVIAL(debug) << "[PHM]     Object range [" << range.first.first << ", " << range.first.second << "]"
-                    << " layer_height=" << range.second.option("layer_height")->getFloat();
-            }
         }
 
         // Process each plate range, splitting around object ranges where they overlap
         for (const auto& plate_range : plate_layer_ranges) {
-            if (!plate_range.second.has("layer_height")) {
-                BOOST_LOG_TRIVIAL(debug) << "[PHM]     Skipped plate range [" << plate_range.first.first << ", " << plate_range.first.second << "] - no layer_height";
+            if (!plate_range.second.has("layer_height"))
                 continue;
-            }
 
             coordf_t plate_lo = plate_range.first.first;
             coordf_t plate_hi = plate_range.first.second;
-            coordf_t plate_height = plate_range.second.option("layer_height")->getFloat();
-            BOOST_LOG_TRIVIAL(debug) << "[PHM]     Processing plate range [" << plate_lo << ", " << plate_hi << "] layer_height=" << plate_height;
 
             // Collect segments of the plate range that aren't covered by object ranges
             std::vector<std::pair<coordf_t, coordf_t>> uncovered_segments;
@@ -3475,10 +3425,9 @@ bool PrintObject::update_layer_height_profile(const ModelObject &model_object, c
                 coordf_t obj_lo = obj_range.first.first;
                 coordf_t obj_hi = obj_range.first.second;
                 // Check if object range overlaps with plate range
-                if (obj_lo < plate_hi && obj_hi > plate_lo) {
+                if (obj_lo < plate_hi && obj_hi > plate_lo)
                     // Clamp to plate range bounds
                     overlapping_obj_ranges.push_back({std::max(obj_lo, plate_lo), std::min(obj_hi, plate_hi)});
-                }
             }
 
             // Sort by start position
@@ -3486,59 +3435,35 @@ bool PrintObject::update_layer_height_profile(const ModelObject &model_object, c
 
             // Find gaps (uncovered segments) in the plate range
             for (const auto& obj_seg : overlapping_obj_ranges) {
-                if (current_lo < obj_seg.first - EPSILON) {
+                if (current_lo < obj_seg.first - EPSILON)
                     uncovered_segments.push_back({current_lo, obj_seg.first});
-                    BOOST_LOG_TRIVIAL(debug) << "[PHM]       Uncovered segment [" << current_lo << ", " << obj_seg.first << "]";
-                }
                 current_lo = std::max(current_lo, obj_seg.second);
             }
             // Add remaining uncovered segment after all object ranges
-            if (current_lo < plate_hi - EPSILON) {
+            if (current_lo < plate_hi - EPSILON)
                 uncovered_segments.push_back({current_lo, plate_hi});
-                BOOST_LOG_TRIVIAL(debug) << "[PHM]       Uncovered segment [" << current_lo << ", " << plate_hi << "]";
-            }
 
             // Add uncovered segments as plate range entries
             for (const auto& seg : uncovered_segments) {
                 if (seg.second - seg.first > EPSILON) {
                     t_layer_height_range new_range(seg.first, seg.second);
                     merged_ranges[new_range] = plate_range.second;
-                    BOOST_LOG_TRIVIAL(debug) << "[PHM]       Added split plate range [" << seg.first << ", " << seg.second << "] layer_height=" << plate_height;
                 }
             }
         }
 
         // Add all object ranges (they take precedence and weren't split)
-        for (const auto& range : object_ranges) {
+        for (const auto& range : object_ranges)
             merged_ranges[range.first] = range.second;
-            BOOST_LOG_TRIVIAL(debug) << "[PHM]     Added object range [" << range.first.first << ", " << range.first.second << "]"
-                << " layer_height=" << range.second.option("layer_height")->getFloat();
-        }
-
-        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Merged ranges count: " << merged_ranges.size();
-        for (const auto& range : merged_ranges) {
-            BOOST_LOG_TRIVIAL(debug) << "[PHM]     Final merged range [" << range.first.first << ", " << range.first.second << "]"
-                << " layer_height=" << (range.second.has("layer_height") ? std::to_string(range.second.option("layer_height")->getFloat()) : "NOT SET");
-        }
 
         // Use merged ranges if we have any, otherwise use object ranges directly
-        if (!merged_ranges.empty()) {
-            BOOST_LOG_TRIVIAL(debug) << "[PHM]   Calling layer_height_profile_from_ranges with merged_ranges";
+        if (!merged_ranges.empty())
             layer_height_profile = layer_height_profile_from_ranges(slicing_parameters, merged_ranges);
-        } else {
-            BOOST_LOG_TRIVIAL(debug) << "[PHM]   Calling layer_height_profile_from_ranges with model_object.layer_config_ranges (no merged ranges)";
+        else
             layer_height_profile = layer_height_profile_from_ranges(slicing_parameters, model_object.layer_config_ranges);
-        }
         updated = true;
-        BOOST_LOG_TRIVIAL(debug) << "[PHM]   Generated profile, size=" << layer_height_profile.size();
     }
 
-    BOOST_LOG_TRIVIAL(debug) << "[PHM]   Result: updated=" << (updated ? "true" : "false")
-        << ", final layer_height_profile.size()=" << layer_height_profile.size();
-    if (!layer_height_profile.empty() && layer_height_profile.size() >= 4) {
-        BOOST_LOG_TRIVIAL(debug) << "[PHM]     Profile[0,1]=" << layer_height_profile[0] << "," << layer_height_profile[1]
-            << ", Profile[end-2,end-1]=" << layer_height_profile[layer_height_profile.size()-2] << "," << layer_height_profile[layer_height_profile.size()-1];
-    }
     return updated;
 }
 
