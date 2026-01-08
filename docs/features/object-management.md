@@ -20,6 +20,7 @@ Object handling, plate management, and print order control.
 | Duplicate Current Plate | small | Plate/Management | Copy current plate with all objects for quick duplication. | v2.2.0-beta | - | [#6710](https://github.com/SoftFever/OrcaSlicer/pull/6710) |
 | Move Plate to Front | small | Plate/Order | Move any plate to front position using Sokoban-style mechanics. | v2.2.0-beta2 | - | - |
 | Per-Object Skirt and Draft Shield | medium | Object/Settings | Apply skirt and draft shield settings to individual objects. | v2.2.0-beta | - | [#6487](https://github.com/SoftFever/OrcaSlicer/pull/6487) |
+| Plate Height Modifier | medium | Plate/Settings | Plate-level height range modifiers with PHM-only settings (nozzle temperature override, retraction override). | Fork | - | - |
 
 ## Object Cancellation Systems
 
