@@ -1338,6 +1338,12 @@ Print::ApplyStatus Print::apply(const Model &model, DynamicPrintConfig new_full_
                 this->invalidate_step(psGCodeExport));
             m_model.plates_custom_gcodes[m_model.curr_plate_index] = model.get_curr_plate_custom_gcodes();
         }
+        // Sync calib_pa_pattern for PA Pattern calibration so it's available during GCode export
+        if (model.calib_pa_pattern && !m_model.calib_pa_pattern) {
+            m_model.calib_pa_pattern = std::make_unique<CalibPressureAdvancePattern>(*model.calib_pa_pattern);
+        } else if (!model.calib_pa_pattern && m_model.calib_pa_pattern) {
+            m_model.calib_pa_pattern.reset();
+        }
         if (model_object_list_equal(m_model, model)) {
             // The object list did not change.
 			for (const ModelObject *model_object : m_model.objects)

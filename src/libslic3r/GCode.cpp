@@ -2271,16 +2271,38 @@ void GCode::_do_export(Print& print, GCodeOutputStream &file, ThumbnailsGenerato
 
         BoundingBoxf bbox;
         auto pts = std::make_unique<ConfigOptionPoints>();
-        if (print.calib_mode() == CalibMode::Calib_PA_Line || print.calib_mode() == CalibMode::Calib_PA_Pattern) {
-            bbox = bbox_bed;
-            bbox.offset(-25.0);
-            // add 4 corner points of bbox into pts
+        const auto* pa_pattern = print.model().calib_pa_pattern.get();
+        if (pa_pattern) {
+            // PA Pattern calibration: compute print area from all pattern extents
+            for (auto& obj : print.objects()) {
+                for (auto& inst : obj->instances()) {
+                    auto inst_bbox = inst.get_bounding_box();
+                    Vec2d handle_center = print.translate_to_print_space(
+                        Vec2d(inst_bbox.center().x(), inst_bbox.center().y()));
+                    Vec3d hpo = pa_pattern->handle_pos_offset();
+                    Vec2d pattern_center = handle_center - Vec2d(hpo.x(), hpo.y());
+                    double half_x = pa_pattern->print_size_x() / 2;
+                    double half_y = pa_pattern->print_size_y() / 2;
+                    bbox.merge(Vec2d(pattern_center.x() - half_x, pattern_center.y() - half_y));
+                    bbox.merge(Vec2d(pattern_center.x() + half_x, pattern_center.y() + half_y));
+                }
+            }
+            // Also include handle hulls
+            for (const Point &pt : print.first_layer_convex_hull().points)
+                bbox.merge(print.translate_to_print_space(pt));
             pts->values.reserve(4);
             pts->values.emplace_back(bbox.min.x(), bbox.min.y());
             pts->values.emplace_back(bbox.max.x(), bbox.min.y());
             pts->values.emplace_back(bbox.max.x(), bbox.max.y());
             pts->values.emplace_back(bbox.min.x(), bbox.max.y());
-
+        } else if (print.calib_mode() == CalibMode::Calib_PA_Line) {
+            bbox = bbox_bed;
+            bbox.offset(-25.0);
+            pts->values.reserve(4);
+            pts->values.emplace_back(bbox.min.x(), bbox.min.y());
+            pts->values.emplace_back(bbox.max.x(), bbox.min.y());
+            pts->values.emplace_back(bbox.max.x(), bbox.max.y());
+            pts->values.emplace_back(bbox.min.x(), bbox.max.y());
         } else {
             // Convex hull of the 1st layer extrusions, for bed leveling and placing the initial purge line.
             // It encompasses the object extrusions, support extrusions, skirt, brim, wipe tower.
@@ -3591,6 +3613,7 @@ std::string GCode::generate_skirt(const Print &print,
         set_origin(unscaled(offset));
 
         m_avoid_crossing_perimeters.use_external_mp();
+        m_config.apply(print.default_region_config());  // Apply region config for acceleration settings
         Flow layer_skirt_flow = print.skirt_flow().with_height(float(m_skirt_done.back() - (m_skirt_done.size() == 1 ? 0. : m_skirt_done[m_skirt_done.size() - 2])));
         double mm3_per_mm = layer_skirt_flow.mm3_per_mm();
         // Decide where to start looping:
@@ -3949,6 +3972,7 @@ LayerResult GCode::process_layer(
 
     //BBS
     if (first_layer) {
+        m_config.apply(print.default_region_config());  // Apply region config for acceleration settings
         // Orca: we don't need to optimize the Klipper as only set once
         if (m_config.default_acceleration.value > 0 && m_config.initial_layer_acceleration.value > 0) {
             gcode += m_writer.set_print_acceleration((unsigned int)floor(m_config.initial_layer_acceleration.value + 0.5));
@@ -4437,6 +4461,7 @@ LayerResult GCode::process_layer(
                     if (this->m_objSupportsWithBrim.find(instance_to_print.print_object.id()) != this->m_objSupportsWithBrim.end() && !print_wipe_extrusions) {
                         this->set_origin(0., 0.);
                         m_avoid_crossing_perimeters.use_external_mp();
+                        m_config.apply(print.default_region_config());  // Apply region config for acceleration settings
                         for (const ExtrusionEntity* ee : print.m_supportBrimMap.at(instance_to_print.print_object.id()).entities) {
                             gcode += this->extrude_entity(*ee, "brim", m_config.support_speed.value);
                         }
@@ -4484,6 +4509,7 @@ LayerResult GCode::process_layer(
                         if (this->m_objsWithBrim.find(instance_to_print.print_object.id()) != this->m_objsWithBrim.end() && !print_wipe_extrusions) {
                             this->set_origin(0., 0.);
                             m_avoid_crossing_perimeters.use_external_mp();
+                            m_config.apply(print.default_region_config());  // Apply region config for acceleration settings
                             for (const ExtrusionEntity* ee : print.m_brimMap.at(instance_to_print.print_object.id()).entities) {
                                 gcode += this->extrude_entity(*ee, "brim", m_config.support_speed.value);
                             }
@@ -6889,8 +6915,10 @@ std::string GCode::set_object_info(Print *print) {
         return "";
     std::ostringstream gcode;
     size_t object_id = 0;
-    // Orca: check if we are in pa calib mode
-    if (print->calib_mode() == CalibMode::Calib_PA_Line || print->calib_mode() == CalibMode::Calib_PA_Pattern) {
+    const auto* pa_pattern = print->model().calib_pa_pattern.get();
+
+    // Orca: PA Line calibration - single combined polygon for the whole bed
+    if (print->calib_mode() == CalibMode::Calib_PA_Line) {
         BoundingBoxf bbox_bed(print->config().printable_area.values);
         bbox_bed.offset(-25.0);
         Polygon polygon_bed;
@@ -6912,9 +6940,35 @@ std::string GCode::set_object_info(Print *print) {
                 auto bbox      = inst.get_bounding_box();
                 auto center    = print->translate_to_print_space(Vec2d(bbox.center().x(), bbox.center().y()));
                 auto inst_name = get_instance_name(object, inst);
+
+                // Compute expanded polygon for PA pattern objects
+                BoundingBoxf pattern_bbox;
+                if (pa_pattern) {
+                    Vec3d hpo = pa_pattern->handle_pos_offset();
+                    Vec2d pattern_center = center - Vec2d(hpo.x(), hpo.y());
+                    double half_x = pa_pattern->print_size_x() / 2;
+                    double half_y = pa_pattern->print_size_y() / 2;
+                    pattern_bbox = BoundingBoxf(
+                        Vec2d(pattern_center.x() - half_x, pattern_center.y() - half_y),
+                        Vec2d(pattern_center.x() + half_x, pattern_center.y() + half_y));
+                }
+
                 if (gflavor == gcfKlipper) {
-                    gcode << "EXCLUDE_OBJECT_DEFINE NAME=" << inst_name << " CENTER=" << center.x() << "," << center.y()
-                          << " POLYGON=" << polygon_to_string(inst.get_convex_hull_2d(), print) << "\n";
+                    if (pattern_bbox.defined) {
+                        auto pa_center = pattern_bbox.center();
+                        gcode << "EXCLUDE_OBJECT_DEFINE NAME=" << inst_name
+                              << " CENTER=" << pa_center.x() << "," << pa_center.y()
+                              << " POLYGON=["
+                              << "[" << pattern_bbox.min.x() << "," << pattern_bbox.min.y() << "],"
+                              << "[" << pattern_bbox.max.x() << "," << pattern_bbox.min.y() << "],"
+                              << "[" << pattern_bbox.max.x() << "," << pattern_bbox.max.y() << "],"
+                              << "[" << pattern_bbox.min.x() << "," << pattern_bbox.max.y() << "],"
+                              << "[" << pattern_bbox.min.x() << "," << pattern_bbox.min.y() << "]"
+                              << "]\n";
+                    } else {
+                        gcode << "EXCLUDE_OBJECT_DEFINE NAME=" << inst_name << " CENTER=" << center.x() << "," << center.y()
+                              << " POLYGON=" << polygon_to_string(inst.get_convex_hull_2d(), print) << "\n";
+                    }
                 } else if (gflavor == gcfMarlinLegacy || gflavor == gcfMarlinFirmware || gflavor == gcfRepRapFirmware) {
                     gcode << "M486 S" << std::to_string(inst.unique_id);
                     if (gflavor == gcfRepRapFirmware)
