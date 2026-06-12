@@ -521,10 +521,11 @@ void UpdateVersionDialog::update_version_info(wxString release_note, wxString ve
         m_simplebook_release_note->SetSelection(0);
         m_text_up_info->SetLabel(wxString::Format(_L("Click to download new version in default browser: %s"), version));
         wxBoxSizer* sizer_text_release_note = new wxBoxSizer(wxVERTICAL);
-        auto        m_staticText_release_note = new ::Label(m_scrollwindows_release_note, release_note, LB_AUTO_WRAP);
-        m_staticText_release_note->SetMinSize(wxSize(FromDIP(560), -1));
-        m_staticText_release_note->SetMaxSize(wxSize(FromDIP(560), -1));
-        sizer_text_release_note->Add(m_staticText_release_note, 0, wxALL, 5);
+        auto release_note_text = new wxStaticText(m_scrollwindows_release_note, wxID_ANY,
+                                                  _L("Release notes are available from the download page."));
+        release_note_text->SetForegroundColour(wxColour(0x26, 0x2E, 0x30));
+        release_note_text->SetFont(Label::Body_13);
+        sizer_text_release_note->Add(release_note_text, 0, wxALL, 5);
         m_scrollwindows_release_note->SetSizer(sizer_text_release_note);
         m_scrollwindows_release_note->Layout();
         m_scrollwindows_release_note->Fit();

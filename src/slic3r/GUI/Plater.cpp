@@ -3129,8 +3129,12 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
         const auto cfg    = wxGetApp().app_config;
         wxString   layout = wxString::FromUTF8(cfg->get("window_layout"));
         if (!layout.empty()) {
-            m_aui_mgr.LoadPerspective(layout, false);
-            sidebar_layout.is_collapsed = !sidebar.IsShown();
+            if (!layout.Contains("dock_size(5,0,0)=20|")) {
+                m_aui_mgr.LoadPerspective(layout, false);
+                sidebar_layout.is_collapsed = !sidebar.IsShown();
+            } else {
+                cfg->set("window_layout", "");
+            }
         }
 
         // Keep tracking the current sidebar size, by storing it using `best_size`, which will be stored
@@ -5377,7 +5381,11 @@ void Plater::priv::reset(bool apply_presets_change)
             sidebar.Show();
         }
         auto layout = m_aui_mgr.SavePerspective();
-        wxGetApp().app_config->set("window_layout", layout.utf8_string());
+        if (!layout.Contains("dock_size(5,0,0)=20|")) {
+            wxGetApp().app_config->set("window_layout", layout.utf8_string());
+        } else {
+            wxGetApp().app_config->set("window_layout", "");
+        }
     }
 }
 
