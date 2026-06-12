@@ -299,6 +299,106 @@ The build system supports multiple Linux distributions including Ubuntu/Debian a
 > [!WARNING]
 > If you encounter memory issues during compilation, use `-j 1` or `-1` to limit parallel compilation, or `-r` to skip memory checks.
 
+#### Local Linux Rebuild Notes
+
+If the checkout was previously used on Windows, remove generated Windows build trees before configuring Linux builds:
+
+```shell
+rm -rf build deps/build
+```
+
+`deps/DL_CACHE/` may be kept; it contains downloaded source archives and is reused by the Linux dependency build.
+
+On Linux, make sure Git does not reintroduce Windows line endings and that shell scripts are executable:
+
+```shell
+git config core.autocrlf input
+git ls-files '*.sh' 'scripts/linux.d/*' | xargs chmod +x
+```
+
+If dependency patch files fail with errors like `corrupt patch`, check for CRLF line endings in `deps/**/*.patch` and normalize them before rebuilding.
+
+##### Local CPU-optimized build
+
+For a machine-specific build, pass compiler flags before the first configure. The following flags are suitable for an AMD Ryzen 9 9950X with GCC 15 or newer:
+
+```shell
+export CFLAGS='-march=znver5 -mtune=znver5 -O3 -pipe'
+export CXXFLAGS='-march=znver5 -mtune=znver5 -O3 -pipe'
+./build_linux.sh -j 16 -dsi
+```
+
+Use `-march=native -mtune=native` instead if you want GCC to choose the local CPU target automatically.
+
+> [!WARNING]
+> CPU-specific flags make the binaries less portable. A `znver5` build is intended for Zen 5/Ryzen 9000 systems and may not run on older CPUs.
+
+> [!TIP]
+> Avoid `-Ofast` / `-ffast-math` for normal slicer builds. Geometry and slicing code is numerically sensitive, so keep standard floating-point behavior unless you are intentionally testing a risky performance build.
+
+##### Parallelism
+
+The 9950X has enough cores to make high `-j` values tempting, but full static OrcaSlicer builds can use a lot of memory, especially with `-O3`. If Ninja appears to sit at one progress number for a long time, it may still be compiling several large translation units silently, but swap use can make it look stuck.
+
+Recommended starting points:
+
+- Use `-j 16` for reliable local optimized builds on a 9950X-class machine.
+- Use `-j 8` or lower if the system starts swapping heavily.
+- Use `NINJA_STATUS='[%e %r/%u/%f] '` to show elapsed time, running jobs, remaining jobs, and finished jobs.
+
+Example:
+
+```shell
+NINJA_STATUS='[%e %r/%u/%f] ' \
+CFLAGS='-march=znver5 -mtune=znver5 -O3 -pipe' \
+CXXFLAGS='-march=znver5 -mtune=znver5 -O3 -pipe' \
+./build_linux.sh -j 16 -dsi
+```
+
+##### Output paths
+
+Common Linux outputs are:
+
+- `build/src/Release/orca-slicer` - main executable for Ninja Multi-Config Release builds
+- `build/src/Release/OrcaSlicer_profile_validator` - profile validator utility
+- `build/OrcaSlicer_Linux_<version>.AppImage` - generated AppImage
+- `deps/build/destdir/usr/local/` - dependency install prefix used by the main build
+
+If AppImage generation fails with `Permission denied` for `build/src/build_linux_image.sh`, run it through Bash from the build directory:
+
+```shell
+cd build
+bash ./src/build_linux_image.sh -i
+```
+
+##### White 3D view (EGL vs GLX mismatch)
+
+If the application starts but the 3D plater area stays white (no bed, no models), the GL canvas is most likely rendering through the wrong GL window-system binding. This was observed on NVIDIA with a Wayland session (the app forces `GDK_BACKEND=x11`, so it runs over XWayland): with an EGL-backed `wxGLCanvas`, every frame rendered and swapped without errors, but nothing ever reached the screen.
+
+Two dependencies decide the binding, and they must agree:
+
+- **wxWidgets** — `deps/wxWidgets/wxWidgets.cmake` passes `-DwxUSE_GLCANVAS_EGL=OFF` so the canvas uses GLX. Without the flag, wxWidgets auto-enables EGL whenever system libEGL development files are present. The same flag is mirrored in `scripts/flatpak/io.github.softfever.OrcaSlicer.yml`.
+- **GLEW** — `deps/GLEW/glew/CMakeLists.txt` builds GLX-mode GLEW by default (`GLEW_USE_EGL=OFF`). A `GLEW_EGL` build makes `glewInit()` require a current EGL context, so it fails against a GLX context and every render is skipped.
+
+Diagnosis from the logs in `~/.config/OrcaSlicer/log/`:
+
+- `Unable to init glew library` and no `got opengl version ...` line — GLEW was built for EGL while the canvas uses GLX (or vice versa). Rebuild whichever side is stale.
+- `got opengl version ...` present, shaders load, yet the view stays white — the canvas is presenting through EGL on a driver/session combination that never displays the frames; make sure wxWidgets was built with `wxUSE_GLCANVAS_EGL=OFF`.
+
+To verify what a build actually linked, check the binary for GLX vs EGL entry points:
+
+```shell
+nm -D build/src/Release/orca-slicer | grep -E ' U (egl|glX)'
+```
+
+A healthy GLX build references `glX*` symbols only.
+
+> [!WARNING]
+> Flipping either option requires a *clean* rebuild of that dependency (delete its `deps/build/dep_<name>-prefix/src/dep_<name>-build` directory). An incremental rebuild can leave object files compiled against the old `setup.h`, producing a library that still contains the previous backend.
+
+> [!NOTE]
+> When building manually with Ninja, the main build tree uses the Ninja Multi-Config generator: plain `ninja` builds the **Debug** configuration. Use `ninja -f build-Release.ninja` (or `cmake --build . --config Release`) for the Release binary at `build/src/Release/orca-slicer`.
+
 ---
 
 ## Portable User Configuration

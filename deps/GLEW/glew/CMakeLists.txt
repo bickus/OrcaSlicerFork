@@ -3,7 +3,12 @@ project(GLEW)
 
 find_package(OpenGL REQUIRED)
 
-if(OpenGL_EGL_FOUND)
+# wxWidgets is built with wxUSE_GLCANVAS_EGL=OFF (GLX backend, see
+# deps/wxWidgets/wxWidgets.cmake), and glewInit() built with GLEW_EGL fails
+# against a GLX context. Keep GLEW in GLX mode to match; flip GLEW_USE_EGL
+# only together with the wxWidgets EGL option.
+option(GLEW_USE_EGL "Build GLEW for EGL instead of GLX (must match wxUSE_GLCANVAS_EGL)" OFF)
+if(GLEW_USE_EGL AND OpenGL_EGL_FOUND)
     message(STATUS "building GLEW for EGL (hope that wxWidgets agrees, otherwise you won't have any output!)")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DGLEW_EGL")
 endif()

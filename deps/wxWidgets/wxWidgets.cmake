@@ -39,6 +39,9 @@ orcaslicer_add_cmake_project(
         -DwxUSE_UNICODE=ON
         ${_wx_private_font}
         -DwxUSE_OPENGL=ON
+        # EGL-backed wxGLCanvas renders to a surface that never reaches the
+        # screen on NVIDIA + XWayland (white 3D view); force the GLX backend.
+        -DwxUSE_GLCANVAS_EGL=OFF
         -DwxUSE_WEBREQUEST=ON
         -DwxUSE_WEBVIEW=ON
         ${_wx_edge}
