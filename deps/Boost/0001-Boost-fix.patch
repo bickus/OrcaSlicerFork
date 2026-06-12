@@ -2,14 +2,14 @@ From 1d6cd7c2f8640db3cda194c1b9b82f1e4b321395 Mon Sep 17 00:00:00 2001
 From: "chunmao.guo" <chunmao.guo@bambulab.com>
 Date: Thu, 5 Jan 2023 15:55:57 +0800
 Subject: [PATCH] FIX: limit_handles
-
+ 
 ---
  boost/process/detail/posix/executor.hpp  |  4 +++-
  boost/process/detail/posix/pipe_out.hpp  | 13 +++++++++++--
  boost/process/detail/used_handles.hpp    |  3 +++
  boost/process/detail/windows/handles.hpp | 10 +++++++---
  4 files changed, 24 insertions(+), 6 deletions(-)
-
+ 
 diff --git a/boost/process/detail/posix/executor.hpp b/boost/process/detail/posix/executor.hpp
 index ca7713c..5521720 100644
 --- a/boost/process/detail/posix/executor.hpp
@@ -122,4 +122,4 @@ index 7a93ac2..f120ef7 100644
                                         [](::boost::winapi::HANDLE_ handle) {return handle != ::boost::winapi::INVALID_HANDLE_VALUE_;});
 -- 
 2.36.1.windows.1
-
+ 

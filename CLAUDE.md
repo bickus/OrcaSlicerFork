@@ -71,6 +71,29 @@ build_release_vs2022.bat slicer
 ./build_linux.sh -l    # use Clang instead of GCC
 ```
 
+For this local Linux workstation, prefer the documented optimized rebuild flow in `doc/developer-reference/How-to-build.md`:
+
+```bash
+# Clean old/generated build outputs first, especially after a Windows checkout/build
+rm -rf build deps/build
+
+# Keep Linux scripts usable after Windows-origin checkouts
+git config core.autocrlf input
+git ls-files '*.sh' 'scripts/linux.d/*' | xargs chmod +x
+
+# Ryzen 9 9950X / GCC 15+ local optimized build
+NINJA_STATUS='[%e %r/%u/%f] ' \
+CFLAGS='-march=znver5 -mtune=znver5 -O3 -pipe' \
+CXXFLAGS='-march=znver5 -mtune=znver5 -O3 -pipe' \
+./build_linux.sh -j 16 -dsi
+```
+
+Notes:
+- Use `-j 16` rather than `-j 32` for the full optimized static build; `-j 32` can push the machine into swap and make Ninja appear stuck.
+- Do not use `-Ofast` / `-ffast-math` for normal slicer builds; geometry and slicing code is numerically sensitive.
+- Outputs are `build/src/Release/orca-slicer`, `build/src/Release/OrcaSlicer_profile_validator`, and `build/OrcaSlicer_Linux_<version>.AppImage`.
+- If AppImage packaging fails with `Permission denied` for `build/src/build_linux_image.sh`, run `cd build && bash ./src/build_linux_image.sh -i`.
+
 ### Build System
 - Uses CMake with minimum version 3.13 (maximum 3.31.x on Windows)
 - Primary build directory: `build/`

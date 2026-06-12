@@ -8,4 +8,4 @@
 +        tbb::task* next_offloaded;
          };
  #endif /* __TBB_TASK_PRIORITY */
-
+ 

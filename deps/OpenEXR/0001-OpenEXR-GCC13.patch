@@ -2,18 +2,18 @@
 +++ b/OpenEXR/IlmImf/ImfDwaCompressor.cpp
 @@ -159,6 +159,7 @@
  #include <limits>
-
+ 
  #include <cstddef>
 +#include <cstdint>
-
-
+ 
+ 
  // Windows specific addition to prevent the indirect import of the redefined min/max macros
 --- a/OpenEXR/IlmImf/ImfHuf.h
 +++ b/OpenEXR/IlmImf/ImfHuf.h
 @@ -40,6 +40,8 @@
  #include "ImfExport.h"
  #include "ImfNamespace.h"
-
+ 
 +#include <cstdint>
 +
  //-----------------------------------------------------------------------------
@@ -23,9 +23,10 @@
 +++ b/OpenEXR/IlmImf/ImfMisc.h
 @@ -51,6 +51,7 @@
  #include "ImfForward.h"
-
+ 
  #include <cstddef>
 +#include <cstdint>
  #include <vector>
-
-
+ 
+ 
+ OPENEXR_IMF_INTERNAL_NAMESPACE_HEADER_ENTER

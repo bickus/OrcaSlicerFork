@@ -5,7 +5,7 @@ also added patch from PS2.4 (PNG.pach) in pngrutil.c
  CMakeLists.txt | 28 ++++++++++++++++++++--------
  pngrutil.c     |  7 -------
  2 files changed, 20 insertions(+), 15 deletions(-)
-
+ 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 4db9bb87d..9099d1edf 100644
 --- a/CMakeLists.txt

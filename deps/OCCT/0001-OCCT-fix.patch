@@ -200,12 +200,12 @@ From: dpasukhi <dpasukhi@opencascade.com>
 Date: Tue, 27 Aug 2024 11:33:29 +0100
 Subject: [PATCH] 0033808: Coding - FreeType Use unsigned point and contour
  indexing in `FT_Outline`
-
+ 
 Changes to auto instead of specific type
 ---
  src/StdPrs/StdPrs_BRepFont.cxx | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
-
+ 
 diff --git a/src/StdPrs/StdPrs_BRepFont.cxx b/src/StdPrs/StdPrs_BRepFont.cxx
 index ab2d9b3c9f..cd701879b1 100644
 --- a/src/StdPrs/StdPrs_BRepFont.cxx
